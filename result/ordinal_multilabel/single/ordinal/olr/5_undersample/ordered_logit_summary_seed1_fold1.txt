@@ -1,0 +1,48 @@
+                             OrderedModel Results                             
+==============================================================================
+Dep. Variable:                      y   Log-Likelihood:            -1.6983e+06
+Model:                   OrderedModel   AIC:                         3.397e+06
+Method:            Maximum Likelihood   BIC:                         3.397e+06
+Date:                Thu, 16 Oct 2025                                         
+Time:                        18:34:15                                         
+No. Observations:              970248                                         
+Df Residuals:                  970214                                         
+Df Model:                          29                                         
+=============================================================================================================================
+                                                                coef    std err          z      P>|z|      [0.025      0.975]
+-----------------------------------------------------------------------------------------------------------------------------
+month_sin                                                     0.0238      0.002     13.226      0.000       0.020       0.027
+same_day_count                                               -0.0214      0.003     -6.373      0.000      -0.028      -0.015
+size                                                         -0.0514      0.004    -13.774      0.000      -0.059      -0.044
+official_price                                               -0.0167      0.002     -8.289      0.000      -0.021      -0.013
+population_density                                           -0.0342      0.002    -16.497      0.000      -0.038      -0.030
+building_coverage_ratio                                       0.1582      0.012     13.587      0.000       0.135       0.181
+floor_area_ratio                                             -0.1752      0.013    -13.935      0.000      -0.200      -0.151
+on_foot                                                      -0.0035      0.002     -1.781      0.075      -0.007       0.000
+on_day_reason_group_cancellation                              0.7624      0.006    130.850      0.000       0.751       0.774
+on_day_reason_group_collateral                                0.0702      0.005     12.809      0.000       0.059       0.081
+on_day_reason_group_inheritance_or_gift_transfer              0.7804      0.007    112.815      0.000       0.767       0.794
+on_day_reason_group_other_causes_transfer                     0.4721      0.013     35.982      0.000       0.446       0.498
+on_day_reason_group_ownership_origin                         -0.5292      0.033    -16.049      0.000      -0.594      -0.465
+on_day_reason_group_physical_change                          -0.5306      0.008    -70.101      0.000      -0.545      -0.516
+on_day_reason_group_restriction                               0.5324      0.040     13.250      0.000       0.454       0.611
+on_day_reason_group_sale                                     -0.1289      0.006    -23.253      0.000      -0.140      -0.118
+on_day_reason_group_title_or_right_correction                 0.0985      0.006     16.160      0.000       0.087       0.110
+on_day_reason_group_title_registration                       -2.3122      0.035    -65.256      0.000      -2.382      -2.243
+dummy_category_i_mid_high_rise_residential_district          -0.0197      0.007     -2.793      0.005      -0.034      -0.006
+dummy_category_i_residential_district                         0.0406      0.008      5.290      0.000       0.026       0.056
+dummy_category_ii_low_rise_exclusive_residential_district     0.0229      0.018      1.305      0.192      -0.011       0.057
+dummy_category_ii_mid_high_rise_residential_district          0.0001      0.009      0.014      0.989      -0.018       0.019
+dummy_category_ii_residential_district                        0.0549      0.012      4.739      0.000       0.032       0.078
+dummy_commercial_district                                     0.1837      0.019      9.911      0.000       0.147       0.220
+dummy_exclusively_industrial_district                         0.2688      0.028      9.750      0.000       0.215       0.323
+dummy_industrial_district                                     0.0274      0.014      2.005      0.045       0.001       0.054
+dummy_neighborhood_commercial_district                        0.0862      0.010      8.487      0.000       0.066       0.106
+dummy_quasi_industrial_district                               0.0111      0.009      1.222      0.222      -0.007       0.029
+dummy_semi_residential_district                               0.0957      0.014      6.660      0.000       0.068       0.124
+0/1                                                          -1.4383      0.009   -169.184      0.000      -1.455      -1.422
+1/2                                                          -0.0421      0.002    -17.933      0.000      -0.047      -0.038
+2/3                                                          -0.3050      0.002   -131.480      0.000      -0.310      -0.300
+3/4                                                          -0.3006      0.002   -129.348      0.000      -0.305      -0.296
+4/5                                                          -0.0399      0.002    -17.006      0.000      -0.044      -0.035
+=============================================================================================================================

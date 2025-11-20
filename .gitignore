@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+
+# virtual env
+DF_Master_venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build artifacts
+*.egg-info/
+
+# Logs
+logs/
+*.log
+
+# Large data
+data/
+*.csv
+
+
+# 機密
+Attention.txt
