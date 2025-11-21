@@ -1079,7 +1079,7 @@ print("統合評価の保存フェーズ完了")
 print("--------------------------------")
 
 
-# ★追加：DM施策（売買限定）のシミュレーション結果を集計・保存
+# DM施策（売買限定）のシミュレーション結果を集計・保存
 dm_sim_path = os.path.join(result_dir, "dm_simulation_sale_within_Hmonths.csv")
 
 with open(dm_sim_path, "w", newline="", encoding="utf-8") as f:
@@ -1088,12 +1088,10 @@ with open(dm_sim_path, "w", newline="", encoding="utf-8") as f:
         "H_months",
         "TP", "FP", "FN", "TN",
         "ML_response_rate",
-        "Baseline_response_rate",
-        "Deals_baseline",
         "Deals_ML",
-        "Delta_deals",
-        "Pi_deal",
-        "Delta_revenue"
+        "Revenue",
+        "Revenue_per_month",
+        "Pi_deal"
     ])
 
     for H in H_MONTHS_LIST:
@@ -1109,29 +1107,78 @@ with open(dm_sim_path, "w", newline="", encoding="utf-8") as f:
         else:
             ml_response_rate = 0.0
 
-        baseline_response_rate = BASELINE_RESPONSE_RATE
-
-        # 成約数 = DM送付数 × 反響率 × 成約率
-        deals_baseline = DM_FIXED * baseline_response_rate * ALPHA
+        # 成約数 = DM送付数 × 反響率 × 成約率（ML 手法のみ）
         deals_ml = DM_FIXED * ml_response_rate * ALPHA
-        delta_deals = deals_ml - deals_baseline
 
-        # 収益への影響 = 成約数の増分 × 1成約あたりの収益
-        delta_revenue = delta_deals * PI_DEAL
+        # 収益 = 成約数 × 1成約あたりの収益（Baseline ではなく絶対値）
+        revenue = deals_ml * PI_DEAL
+
+        # H ヶ月あたりの平均収益（H で割って正規化）
+        if H > 0:
+            revenue_per_month = revenue / H
+        else:
+            revenue_per_month = 0.0
 
         writer.writerow([
             H,
             TP, FP, FN, TN,
             ml_response_rate,
-            baseline_response_rate,
-            deals_baseline,
             deals_ml,
-            delta_deals,
-            PI_DEAL,
-            delta_revenue
+            revenue,
+            revenue_per_month,
+            PI_DEAL
         ])
 
 print(f"DMシミュレーション結果を保存しました: {dm_sim_path}")
 
+
+# DM施策（売買限定）の混同行列を保存
+conf_mat_dir = os.path.join(result_dir, "dm_confusion_matrix")
+os.makedirs(conf_mat_dir, exist_ok=True)
+
+for H in H_MONTHS_LIST:
+    cnt = dm_confusion[H]
+    TP, FP, FN, TN = cnt["TP"], cnt["FP"], cnt["FN"], cnt["TN"]
+
+    # 2x2 confusion matrix
+    cm = np.array([[TP, FP],
+                   [FN, TN]])
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    im = ax.imshow(cm, cmap="Blues")
+
+    # write counts in each cell
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, f"{cm[i, j]}", ha="center", va="center", fontsize=12)
+
+    # axis labels based on *meaning* of the positive class:
+    # "H months以内 & sale & DM施策範囲内"
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+
+    ax.set_xticklabels([
+        f"Pred: Sale within {H} months (DM target)",
+        "Pred: Otherwise"
+    ], fontsize=10, rotation=20, ha="right")
+
+    ax.set_yticklabels([
+        f"True: Sale within {H} months (DM target)",
+        "True: Otherwise"
+    ], fontsize=10)
+
+    ax.set_title(f"Confusion Matrix for H={H} Months\n"
+                 "(Positive = sale within H months in DM target range)",
+                 fontsize=12)
+
+    fig.colorbar(im, ax=ax)
+
+    out_path = os.path.join(conf_mat_dir, f"confusion_H{H}.png")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300)
+    plt.close()
+
+print(f"Confusion matrices saved to: {conf_mat_dir}")
 
 

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from lightgbm import LGBMClassifier
 from sklearn.model_selection import StratifiedKFold
+import matplotlib.pyplot as plt
 
 # ===================== 設定 =====================
 
@@ -125,7 +126,7 @@ def main():
 
     # ================= DMシミュレーション結果の保存 =================
     out_path = os.path.join(RESULT_DIR, "dm_simulation_sale_within_Hmonths_binaryH.csv")
-    print(f"\nSaving DM simulation (binary H-baseline) to: {out_path}")
+    print(f"\nSaving DM simulation (binary H) to: {out_path}")
 
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -133,12 +134,10 @@ def main():
             "H_months",
             "TP", "FP", "FN", "TN",
             "ML_response_rate",
-            "Baseline_response_rate",
-            "Deals_baseline",
             "Deals_ML",
-            "Delta_deals",
-            "Pi_deal",
-            "Delta_revenue"
+            "Revenue",
+            "Revenue_per_month",
+            "Pi_deal"
         ])
 
         for H in H_MONTHS_LIST:
@@ -149,34 +148,79 @@ def main():
             TN = cnt["TN"]
 
             dm_sent = TP + FP
-            if dm_sent > 0:
-                ml_response_rate = TP / dm_sent
-            else:
-                ml_response_rate = 0.0
+            ml_response_rate = TP / dm_sent if dm_sent > 0 else 0.0
 
-            baseline_response_rate = BASELINE_RESPONSE_RATE
-
-            # 成約数 = DM送付数 × 反響率 × 成約率
-            deals_baseline = DM_FIXED * baseline_response_rate * ALPHA
+            # ML手法単体の成約数
             deals_ml = DM_FIXED * ml_response_rate * ALPHA
-            delta_deals = deals_ml - deals_baseline
 
-            # 収益への影響 = 成約数の増分 × 1成約あたりの収益
-            delta_revenue = delta_deals * PI_DEAL
+            # 絶対収益
+            revenue = deals_ml * PI_DEAL
+
+            # 正規化指標
+            revenue_per_month = revenue / H if H > 0 else 0.0
 
             writer.writerow([
                 H,
                 TP, FP, FN, TN,
                 ml_response_rate,
-                baseline_response_rate,
-                deals_baseline,
                 deals_ml,
-                delta_deals,
-                PI_DEAL,
-                delta_revenue
+                revenue,
+                revenue_per_month,
+                PI_DEAL
             ])
 
-    print("Done.")
+    print("CSV saved successfully.")
+
+    # =============== 混同行列の図を保存（論文用表現） ===============
+
+    conf_mat_dir = os.path.join(RESULT_DIR, "dm_confusion_matrix")
+    os.makedirs(conf_mat_dir, exist_ok=True)
+
+    for H in H_MONTHS_LIST:
+        cnt = dm_confusion_binaryH[H]
+        TP, FP, FN, TN = cnt["TP"], cnt["FP"], cnt["FN"], cnt["TN"]
+
+        cm = np.array([[TP, FP],
+                    [FN, TN]])
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+        im = ax.imshow(cm, cmap="Blues")
+
+        # セル内に数値を明記
+        for i in range(2):
+            for j in range(2):
+                ax.text(j, i, f"{cm[i, j]}", ha="center", va="center", fontsize=12)
+
+        # 軸ラベル ※意味ベース（ユーザー指定）
+        ax.set_xticks([0, 1])
+        ax.set_yticks([0, 1])
+
+        ax.set_xticklabels([
+            f"Pred: Sale within {H} months (DM target)",
+            "Pred: Otherwise"
+        ], fontsize=10, rotation=20, ha="right")
+
+        ax.set_yticklabels([
+            f"True: Sale within {H} months (DM target)",
+            "True: Otherwise"
+        ], fontsize=10)
+
+        ax.set_title(
+            f"Confusion Matrix for H={H} Months\n"
+            "(Positive = sale within H months in DM targeting scope)",
+            fontsize=12
+        )
+
+        fig.colorbar(im, ax=ax)
+
+        out_path = os.path.join(conf_mat_dir, f"confusion_H{H}.png")
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=300)
+        plt.close()
+
+    print("Confusion matrices saved.")
+
+
 
 
 if __name__ == "__main__":
