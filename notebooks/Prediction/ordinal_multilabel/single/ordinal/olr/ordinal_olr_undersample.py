@@ -42,14 +42,21 @@ def compute_ordered_metrics(y_true, y_pred):
         # "QWK": qwk
     }
 
-def mean_ci(data, confidence=0.95):
-    n = len(data)
-    m = np.mean(data)
-    se = np.std(data, ddof=1) / np.sqrt(n)
-    h = se * t.ppf((1 + confidence) / 2., n-1)
-    return m, m - h, m + h
+# def mean_ci(data, confidence=0.95):
+#     n = len(data)
+#     m = np.mean(data)
+#     se = np.std(data, ddof=1) / np.sqrt(n)
+#     h = se * t.ppf((1 + confidence) / 2., n-1)
+#     return m, m - h, m + h
 
-
+def mean_std(values):
+    """
+    values: list or np.array
+    return: mean, std (sample std, ddof=1)
+    """
+    mean = float(np.mean(values))
+    std = float(np.std(values, ddof=1))
+    return mean, std
 
 
 # ---------- データ読み込み ----------
@@ -201,7 +208,8 @@ for seed in seeds:
         
         end_time = time.time()
         print("学習終了時刻：", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)))
-        print(f"順序回帰モデル（Ordered Logistic Regression）の学習完了（経過時間: {end_time - start_time:.2f} 秒）")
+        print(f"順序回帰モデル（Ordered Logistic Regression）の学習完了（経過時間: {end_time - start_time:.2f} 秒）") 
+        # 1時間くらい
         print("学習フェーズ完了")
         print("--------------------------------")
 
@@ -323,22 +331,22 @@ summary_all_path = os.path.join(result_dir, "metrics_all_summary_olr_5_undersamp
 
 with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
-    writer.writerow(["Category", "Averaging", "Metric", "Mean", "95% CI Lower", "95% CI Upper"])
+    writer.writerow(["Category", "Averaging", "Metric", "Mean", "Std"])
 
 
     # 1. 順序回帰の評価指標
     for name in metric_names:
         values = [m[name] for m in all_metrics]
-        mean, ci_lower, ci_upper = mean_ci(values)
-        writer.writerow(["Ordinal", "-", name, mean, ci_lower, ci_upper])
+        mean, std = mean_std(values)
+        writer.writerow(["Ordinal", "-", name, mean, std])
 
     # 2. Final (argmax) に対する各しきい値 y ≤ k の二値指標（AUCなし）
     for k in range(olr_output_dim):
         label = label_names[k]
         for metric in ["accuracy", "precision", "recall", "f1"]:
             values = final_bincls_scores[k][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["OrdinalBinary(Final-Argmax)", f"y <= '{label}'", metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["OrdinalBinary(Final-Argmax)", f"y <= '{label}'", metric, mean, std])
 
 
     # 3. olr 順序回帰の各二値タスクごとのスコア
@@ -346,14 +354,14 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
         label = label_names[k]  # 例: '〜1 month'
         for metric in ["accuracy", "precision", "recall", "f1"]:
             values = olr_per_task_scores[k][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["OrdinalBinary", f"y <= '{label}'", metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["OrdinalBinary", f"y <= '{label}'", metric, mean, std])
 
         # --- AUC の統合評価 ---
         auc_values = [v for v in olr_auc_per_task[k] if not np.isnan(v)]
         if len(auc_values) > 0:
-            mean, ci_lower, ci_upper = mean_ci(auc_values)
-            writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, ci_lower, ci_upper])
+            mean, std = mean_std(auc_values)
+            writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, std])
     
     # 4. 順序回帰（実測日数 vs 予測日数）の Pearson 相関係数
     true_days_np = np.asarray(all_true_days, dtype=float)

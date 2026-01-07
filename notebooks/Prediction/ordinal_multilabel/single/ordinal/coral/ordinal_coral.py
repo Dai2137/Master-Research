@@ -45,13 +45,21 @@ def compute_ordered_metrics(y_true, y_pred):
         # "QWK": qwk
     }
 
-def mean_ci(data, confidence=0.95):
-    n = len(data)
-    m = np.mean(data)
-    se = np.std(data, ddof=1) / np.sqrt(n)
-    h = se * t.ppf((1 + confidence) / 2., n-1)
-    return m, m - h, m + h
+# def mean_ci(data, confidence=0.95):
+#     n = len(data)
+#     m = np.mean(data)
+#     se = np.std(data, ddof=1) / np.sqrt(n)
+#     h = se * t.ppf((1 + confidence) / 2., n-1)
+#     return m, m - h, m + h
 
+def mean_std(values):
+    """
+    values: list or np.array
+    return: mean, std (sample std, ddof=1)
+    """
+    mean = float(np.mean(values))
+    std = float(np.std(values, ddof=1))
+    return mean, std
 
 # ---------- CORAL ----------
 class CoralOrdinalNN(nn.Module):
@@ -370,27 +378,27 @@ for seed in seeds:
 
         preds_ord_final = preds_ord_all.numpy()
 
-        if fold == 0 and seed == 0:
-            print("SHAPの計算を開始...")
-            # 保存ディレクトリを作成（なければ作る）
-            shap_dir = os.path.join(result_dir, "shap_summary_plot")
-            os.makedirs(shap_dir, exist_ok=True)
+        # if fold == 0 and seed == 0:
+        #     print("SHAPの計算を開始...")
+        #     # 保存ディレクトリを作成（なければ作る）
+        #     shap_dir = os.path.join(result_dir, "shap_summary_plot")
+        #     os.makedirs(shap_dir, exist_ok=True)
 
-            print("CORALのSHAPの計算を開始...")
+        #     print("CORALのSHAPの計算を開始...")
             
-            predict_fn = lambda x: predict_midpoint(model, pd.DataFrame(x, columns=X_test.columns))
+        #     predict_fn = lambda x: predict_midpoint(model, pd.DataFrame(x, columns=X_test.columns))
 
-            explainer_coral = shap.Explainer(predict_fn, X_test, model_output="raw")
-            shap_values_coral = explainer_coral(X_test)
+        #     explainer_coral = shap.Explainer(predict_fn, X_test, model_output="raw")
+        #     shap_values_coral = explainer_coral(X_test)
 
-            # 可視化
-            shap.summary_plot(shap_values_coral, X_test, show=False)
-            plt.title(f"SHAP Summary for Predicted Midpoint (months) Seed {seed+1} Fold {fold+1}")
-            plt.tight_layout()
-            plt.savefig(os.path.join(shap_dir, f"shap_summary_y_pred_mid_seed{seed+1}_fold{fold+1}.png"))
-            plt.close()
-            print("CORALのSHAPの計算完了（y_pred_midベース）")
-            print("SHAPの計算完了")
+        #     # 可視化
+        #     shap.summary_plot(shap_values_coral, X_test, show=False)
+        #     plt.title(f"SHAP Summary for Predicted Midpoint (months) Seed {seed+1} Fold {fold+1}")
+        #     plt.tight_layout()
+        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_y_pred_mid_seed{seed+1}_fold{fold+1}.png"))
+        #     plt.close()
+        #     print("CORALのSHAPの計算完了（y_pred_midベース）")
+        #     print("SHAPの計算完了")
 
 
         print("推論フェーズ完了")
@@ -496,13 +504,13 @@ summary_all_path = os.path.join(result_dir, "metrics_all_summary_coral_no_5_unde
 
 with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
-    writer.writerow(["Category", "Averaging", "Metric", "Mean", "95% CI Lower", "95% CI Upper"])
+    writer.writerow(["Category", "Averaging", "Metric", "Mean", "Std"])
 
     # 1. 順序回帰の評価指標
     for name in metric_names:
         values = [m[name] for m in all_metrics]
-        mean, ci_lower, ci_upper = mean_ci(values)
-        writer.writerow(["Ordinal", "-", name, mean, ci_lower, ci_upper])
+        mean, std = mean_std(values)
+        writer.writerow(["Ordinal", "-", name, mean, std])
 
 
     # 2. Final (argmax) に対する各しきい値 y ≤ k の二値指標（AUCなし）
@@ -510,22 +518,22 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
         label = label_names[k]
         for metric in ["accuracy", "precision", "recall", "f1"]:
             values = final_bincls_scores[k][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["OrdinalBinary(Final-Argmax)", f"y <= '{label}'", metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["OrdinalBinary(Final-Argmax)", f"y <= '{label}'", metric, mean, std])
 
     # 3. CORAL 順序回帰の各二値タスクごとのスコア
     for k in range(coral_output_dim):
         label = label_names[k]  # 例: '〜1 month'
         for metric in ["accuracy", "precision", "recall", "f1"]:
             values = coral_per_task_scores[k][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["OrdinalBinary", f"y <= '{label}'", metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["OrdinalBinary", f"y <= '{label}'", metric, mean, std])
 
         # --- AUC の統合評価 ---
         auc_values = [v for v in coral_auc_per_task[k] if not np.isnan(v)]
         if len(auc_values) > 0:
-            mean, ci_lower, ci_upper = mean_ci(auc_values)
-            writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, ci_lower, ci_upper])
+            mean, std = mean_std(auc_values)
+            writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, std])
     
     # 4. 順序回帰 (日数マッピング後) の相関係数
     true_days_np = np.asarray(all_true_days, dtype=float)

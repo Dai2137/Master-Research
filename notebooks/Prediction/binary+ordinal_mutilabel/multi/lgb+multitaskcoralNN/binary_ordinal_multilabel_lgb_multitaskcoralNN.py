@@ -45,12 +45,14 @@ def compute_ordered_metrics(y_true, y_pred):
         "QWK": qwk
     }
 
-def mean_ci(data, confidence=0.95):
-    n = len(data)
-    m = np.mean(data)
-    se = np.std(data, ddof=1) / np.sqrt(n)
-    h = se * t.ppf((1 + confidence) / 2., n-1)
-    return m, m - h, m + h
+def mean_std(values):
+    """
+    values: list or np.array
+    return: mean, std (sample std, ddof=1)
+    """
+    mean = float(np.mean(values))
+    std = float(np.std(values, ddof=1))
+    return mean, std
 
 
 # ---------- CORAL ----------

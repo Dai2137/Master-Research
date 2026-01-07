@@ -1,0 +1,6 @@
+=== Training / Inference Time Summary (mean ± std) ===
+Unit: seconds
+Std: sample std (ddof=1)
+
+orderedforest_train_time_sec: 1542.107385 ± 193.424904
+orderedforest_inference_time_sec: 27.418101 ± 3.413523

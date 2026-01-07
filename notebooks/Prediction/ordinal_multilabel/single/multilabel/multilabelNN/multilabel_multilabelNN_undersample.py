@@ -44,14 +44,21 @@ def compute_ordered_metrics(y_true, y_pred):
         "QWK": qwk
     }
 
-def mean_ci(data, confidence=0.95):
-    n = len(data)
-    m = np.mean(data)
-    se = np.std(data, ddof=1) / np.sqrt(n)
-    h = se * t.ppf((1 + confidence) / 2., n-1)
-    return m, m - h, m + h
+# def mean_ci(data, confidence=0.95):
+#     n = len(data)
+#     m = np.mean(data)
+#     se = np.std(data, ddof=1) / np.sqrt(n)
+#     h = se * t.ppf((1 + confidence) / 2., n-1)
+#     return m, m - h, m + h
 
-
+def mean_std(values):
+    """
+    values: list or np.array
+    return: mean, std (sample std, ddof=1)
+    """
+    mean = float(np.mean(values))
+    std = float(np.std(values, ddof=1))
+    return mean, std
 
 
 # ---------- Multi-label Classifier ----------
@@ -346,7 +353,7 @@ summary_all_path = os.path.join(result_dir, "metrics_all_summary_multilabelNN_5_
 
 with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
-    writer.writerow(["Category", "Averaging", "Metric", "Mean", "95% CI Lower", "95% CI Upper"])
+    writer.writerow(["Category", "Averaging", "Metric", "Mean", "Std"])
 
 
     # 1. マルチラベル分類（Macro & Weighted）
@@ -354,15 +361,15 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
                                ("Weighted", multilabel_weighted_metrics)]:
         for metric in ["precision", "recall", "f1-score"]:
             values = metrics[metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["Multilabel", avg_type, metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["Multilabel", avg_type, metric, mean, std])
 
     # 2. マルチラベル分類（ラベルごと）
     for label in multilabel_colnames:
         for metric in ["precision", "recall", "f1-score"]:
             values = per_label_scores[label][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["Multilabel", label, metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["Multilabel", label, metric, mean, std])
 
 print("統合評価の保存フェーズ完了")
 print("--------------------------------")

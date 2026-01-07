@@ -47,12 +47,21 @@ def compute_ordered_metrics(y_true, y_pred):
         # "QWK": qwk
     }
 
-def mean_ci(data, confidence=0.95):
-    n = len(data)
-    m = np.mean(data)
-    se = np.std(data, ddof=1) / np.sqrt(n)
-    h = se * t.ppf((1 + confidence) / 2., n-1)
-    return m, m - h, m + h
+# def mean_ci(data, confidence=0.95):
+#     n = len(data)
+#     m = np.mean(data)
+#     se = np.std(data, ddof=1) / np.sqrt(n)
+#     h = se * t.ppf((1 + confidence) / 2., n-1)
+#     return m, m - h, m + h
+
+def mean_std(values):
+    """
+    values: list or np.array
+    return: mean, std (sample std, ddof=1)
+    """
+    mean = float(np.mean(values))
+    std = float(np.std(values, ddof=1))
+    return mean, std
 
 
 # ---------- CORAL ----------
@@ -319,6 +328,8 @@ multilabel_weighted_metrics = {
     "f1-score": []
 }
 
+# ===== 時間ログ（seed×foldごと） =====
+time_logs = []  # list[dict]
 
 
 # ラベルごとのスコア格納用（全fold分,マルチラベル分類）
@@ -427,13 +438,16 @@ for seed in seeds:
         print("LightGBM 最適なハイパーパラメータ:", best_params_lgb)
 
         # ベストモデルを train_idx で再学習
+        t0 = time.perf_counter()
         clf_bin_lgb = LGBMClassifier(**best_params_lgb, random_state=seed * 100 + fold, n_jobs=-1)
         clf_bin_lgb.fit(X.iloc[train_idx], y_binary[train_idx])
+        t1 = time.perf_counter()
+        lgb_train_time = t1 - t0
         print("二値分類モデルの学習完了")
 
         # ========== Step 1-2: CORALの学習 ==========
         print("CORALの学習を開始...")
-        start_time = time.time()
+        t0 = time.perf_counter()
 
         # 再登記されるものだけ使う（binary=0）
         mask_train = y_binary[train_idx] == 0
@@ -516,29 +530,29 @@ for seed in seeds:
         coral_model.load_state_dict(best_model_state)
         
         # 保存ディレクトリを作成（なければ作る）
-        learning_curve_dir = os.path.join(result_dir, "learning_curve_coral")
-        os.makedirs(learning_curve_dir, exist_ok=True)
+        # learning_curve_dir = os.path.join(result_dir, "learning_curve_coral")
+        # os.makedirs(learning_curve_dir, exist_ok=True)
 
-        plt.figure(figsize=(10, 6))
-        plt.plot(train_losses, label="Train Loss")
-        plt.plot(val_losses, label="Validation Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.title(f"Learning Curve (Seed {seed+1}, Fold {fold+1}, CORAL)")
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(os.path.join(learning_curve_dir, f"learning_curve_coral_seed{seed+1}_fold{fold+1}.png"))
-        plt.close()
-
-
+        # plt.figure(figsize=(10, 6))
+        # plt.plot(train_losses, label="Train Loss")
+        # plt.plot(val_losses, label="Validation Loss")
+        # plt.xlabel("Epoch")
+        # plt.ylabel("Loss")
+        # plt.title(f"Learning Curve (Seed {seed+1}, Fold {fold+1}, CORAL)")
+        # plt.legend()
+        # plt.tight_layout()
+        # plt.savefig(os.path.join(learning_curve_dir, f"learning_curve_coral_seed{seed+1}_fold{fold+1}.png"))
+        # plt.close()
         
-        end_time = time.time()
-        print(f"CORALの学習完了（経過時間: {end_time - start_time:.2f} 秒）")
+        t1 = time.perf_counter()
+        coral_train_time = t1 - t0
+        # print(f"CORALの学習完了（経過時間: {end_time - start_time:.2f} 秒）")
 
 
         # ========== Step 1-2: マルチラベルNNの学習 ==========
         print("マルチラベルNNの学習を開始...")
-        start_time = time.time()
+        # start_time = time.time()
+        t0 = time.perf_counter()
 
         # 再登記されるものだけ使う（binary=0）
         mask_train = y_binary[train_idx] == 0
@@ -621,25 +635,27 @@ for seed in seeds:
         # ベストモデルを復元
         multilabelNN_model.load_state_dict(best_model_state)
 
-        # 保存ディレクトリを作成（なければ作る）
-        learning_curve_dir = os.path.join(result_dir, "learning_curve_multilabelNN")
-        os.makedirs(learning_curve_dir, exist_ok=True)
+        # # 保存ディレクトリを作成（なければ作る）
+        # learning_curve_dir = os.path.join(result_dir, "learning_curve_multilabelNN")
+        # os.makedirs(learning_curve_dir, exist_ok=True)
 
-        plt.figure(figsize=(10, 6))
-        plt.plot(train_losses, label="Train Loss")
-        plt.plot(val_losses, label="Validation Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.title(f"Learning Curve (Seed {seed+1}, Fold {fold+1}, MultilabelNN)")
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(os.path.join(learning_curve_dir, f"learning_curve_multilabelNN_seed{seed+1}_fold{fold+1}.png"))
-        plt.close()
+        # plt.figure(figsize=(10, 6))
+        # plt.plot(train_losses, label="Train Loss")
+        # plt.plot(val_losses, label="Validation Loss")
+        # plt.xlabel("Epoch")
+        # plt.ylabel("Loss")
+        # plt.title(f"Learning Curve (Seed {seed+1}, Fold {fold+1}, MultilabelNN)")
+        # plt.legend()
+        # plt.tight_layout()
+        # plt.savefig(os.path.join(learning_curve_dir, f"learning_curve_multilabelNN_seed{seed+1}_fold{fold+1}.png"))
+        # plt.close()
 
 
         
-        end_time = time.time()
-        print(f"マルチラベルNNの学習完了（経過時間: {end_time - start_time:.2f} 秒）")
+        # end_time = time.time()
+        t1 = time.perf_counter()
+        mlp_train_time = t1 - t0
+        # print(f"マルチラベルNNの学習完了（経過時間: {end_time - start_time:.2f} 秒）")
 
         print("学習フェーズ完了")
         print("--------------------------------")
@@ -656,15 +672,22 @@ for seed in seeds:
         y_multilabel_test = y_multilabel[test_idx]
 
         # Step 2: 二値分類予測
+        t0 = time.perf_counter()
         y_bin_pred = clf_bin_lgb.predict(X_test)
+        t1 = time.perf_counter()
+        lgb_inference_time = t1 - t0
+        
         mask_bin0 = y_bin_pred == 0
 
         # Step 3-1: NNの対象だけ取り出して順序回帰の推論
         X_test_masked = torch.tensor(X_test[mask_bin0].values, dtype=torch.float32)
 
+        t0 = time.perf_counter()
         with torch.no_grad():
             probs_ord_masked, _ = coral_model(X_test_masked)
             preds_ord_masked = predict_classes(probs_ord_masked)
+        t1 = time.perf_counter()
+        coral_inference_time = t1 - t0
         
         # 統合予測ラベルの作成（順序分類，再登記されないと予測されたものは全てno_re_registration_class、再登記されるものにはNNの予測を代入）
         no_re_registration_class = label_names.index('120- months')  # → 5
@@ -675,10 +698,13 @@ for seed in seeds:
         # Step 3-2: NNの対象だけ取り出してマルチラベル分類の推論
         X_test_masked = torch.tensor(X_test[mask_bin0].values, dtype=torch.float32)
 
+        t0 = time.perf_counter()
         with torch.no_grad():
             probs_multilabel_masked = multilabelNN_model(X_test_masked)
             preds_multilabel_masked = (probs_multilabel_masked > 0.5).int().numpy()
-        
+        t1 = time.perf_counter()
+        mlp_inference_time = t1 - t0
+
         # 統合予測ラベルの作成（マルチラベル分類，再登記されないと予測されたものは全て0、再登記されるものにはNNの予測を代入）
         preds_multilabel_final = np.zeros_like(y_multilabel_test)
         preds_multilabel_final[mask_bin0] = preds_multilabel_masked
@@ -695,10 +721,10 @@ for seed in seeds:
         #     explainer_lgb = shap.TreeExplainer(clf_bin_lgb)
         #     shap_values_lgb = explainer_lgb(X_test)
         #     plt.figure()
-        #     shap.summary_plot(shap_values_lgb, X_test, show=False)
+        #     shap.summary_plot(shap_values_lgb, X_test, show=False, max_display=5)
         #     plt.title(f"SHAP Summary LightGBM Seed {seed+1} Fold {fold+1}")
         #     plt.tight_layout()
-        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_lgb_seed{seed+1}_fold{fold+1}.png"))
+        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_lgb_seed{seed+1}_fold{fold+1}_max_display5.png"))
         #     plt.close()
         #     print("LightGBMのSHAPの計算完了")
 
@@ -709,10 +735,10 @@ for seed in seeds:
         #     explainer_coral = shap.Explainer(predict_fn, X_test, model_output="raw")
         #     shap_values_coral = explainer_coral(X_test)
 
-        #     shap.summary_plot(shap_values_coral, X_test, show=False)
+        #     shap.summary_plot(shap_values_coral, X_test, show=False, max_display=5)
         #     plt.title(f"SHAP Summary for Predicted Midpoint (months) Seed {seed+1} Fold {fold+1}")
         #     plt.tight_layout()
-        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_y_pred_mid_seed{seed+1}_fold{fold+1}.png"))
+        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_y_pred_mid_seed{seed+1}_fold{fold+1}_max_display5.png"))
         #     plt.close()
         #     print("CORALのSHAPの計算完了（y_pred_midベース）")
 
@@ -728,14 +754,14 @@ for seed in seeds:
         print("--------------------------------")
         print("評価フェーズ開始")
 
-        # ★追加：売買ラベル真値（次回登記原因が売買かどうか）
+        # ★追加：売買ラベル正解値（次回登記原因が売買かどうか）
         is_sale_next_true = (y_multilabel_test[:, sale_label_idx] == 1)
 
         # 二値分類の評価
         acc_bin = accuracy_score(y_bin_test, y_bin_pred)
-        precision_bin = precision_score(y_bin_test, y_bin_pred, zero_division=0)
-        recall_bin = recall_score(y_bin_test, y_bin_pred, zero_division=0)
-        f1_bin = f1_score(y_bin_test, y_bin_pred, zero_division=0)
+        precision_bin = precision_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
+        recall_bin = recall_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
+        f1_bin = f1_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
         auc_bin = roc_auc_score(y_bin_test, clf_bin_lgb.predict_proba(X_test)[:, 1])
 
         print(f"[Binary Classification] Acc={acc_bin:.4f}, Precision={precision_bin:.4f}, Recall={recall_bin:.4f}, F1={f1_bin:.4f}, AUC={auc_bin:.4f}")
@@ -771,7 +797,7 @@ for seed in seeds:
         # ===== Final preds (argmax 後) に対する「各しきい値 y ≤ k」の二値分類指標（AUCなし） =====
         print("\n[Final (argmax) y ≤ k : Binary Classification Metrics]")
         for k in range(coral_output_dim):  # 0..K-2
-            # 真値と予測を二値化
+            # 正解値と予測を二値化
             y_bin_true_k = (y_ord_test <= k).astype(int)
             y_bin_pred_k = (preds_ord_final <= k).astype(int)
 
@@ -870,32 +896,44 @@ for seed in seeds:
         print("[マルチラベル分類 Classification Report]:")
         print(pd.DataFrame(report_dict).T)
 
+        time_logs.append({
+            "seed": seed,
+            "fold": fold + 1,
+            "lgb_train_time_sec": lgb_train_time,
+            "coral_train_time_sec": coral_train_time,
+            "multilabel_train_time_sec": mlp_train_time,
+            "lgb_inference_time_sec": lgb_inference_time,
+            "coral_inference_time_sec": coral_inference_time,
+            "multilabel_inference_time_sec": mlp_inference_time
+        })
+
+
         
-        # ★ここから追加：DM送付施策（売買限定）の混同行列をHごとに計算
-        # days_until_next（真の登記間隔日数）は既に y_true_days として取得済み
-        true_days_test = y_true_days  # alias（分かりやすさのため）
+        # # ★ここから追加：DM送付施策（売買限定）の混同行列をHごとに計算
+        # # days_until_next（正解の登記間隔日数）は既に y_true_days として取得済み
+        # true_days_test = y_true_days  # alias（分かりやすさのため）
 
-        for H in H_MONTHS_LIST:
-            max_cat = H_TO_MAX_CATEGORY[H]
+        # for H in H_MONTHS_LIST:
+        #     max_cat = H_TO_MAX_CATEGORY[H]
 
-            # 真値: Hヶ月以内に次の登記原因が売買
-            threshold_days = 31 * H
-            true_positive_mask = (is_sale_next_true) & (true_days_test <= threshold_days)
+        #     # 正解値: Hヶ月以内に次の登記原因が売買
+        #     threshold_days = 31 * H
+        #     true_positive_mask = (is_sale_next_true) & (true_days_test <= threshold_days)
 
-            # 予測: Hヶ月以内に再登記が起こると予測 ＆ 次の登記原因が売買と予測
-            pred_within_H = (preds_ord_final <= max_cat)
-            pred_sale = (preds_multilabel_final[:, sale_label_idx] == 1)
-            dm_send = pred_within_H & pred_sale
+        #     # 予測: Hヶ月以内に再登記が起こると予測 ＆ 次の登記原因が売買と予測
+        #     pred_within_H = (preds_ord_final <= max_cat)
+        #     pred_sale = (preds_multilabel_final[:, sale_label_idx] == 1)
+        #     dm_send = pred_within_H & pred_sale
 
-            tp = np.sum(dm_send & true_positive_mask)
-            fp = np.sum(dm_send & (~true_positive_mask))
-            fn = np.sum((~dm_send) & true_positive_mask)
-            tn = np.sum((~dm_send) & (~true_positive_mask))
+        #     tp = np.sum(dm_send & true_positive_mask)
+        #     fp = np.sum(dm_send & (~true_positive_mask))
+        #     fn = np.sum((~dm_send) & true_positive_mask)
+        #     tn = np.sum((~dm_send) & (~true_positive_mask))
 
-            dm_confusion[H]["TP"] += int(tp)
-            dm_confusion[H]["FP"] += int(fp)
-            dm_confusion[H]["FN"] += int(fn)
-            dm_confusion[H]["TN"] += int(tn)
+        #     dm_confusion[H]["TP"] += int(tp)
+        #     dm_confusion[H]["FP"] += int(fp)
+        #     dm_confusion[H]["FN"] += int(fn)
+        #     dm_confusion[H]["TN"] += int(tn)
         # ★追加ここまで
 
 
@@ -914,19 +952,19 @@ summary_all_path = os.path.join(result_dir, "metrics_all_summary_lgb_coral+multi
 
 with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
-    writer.writerow(["Category", "Averaging", "Metric", "Mean", "95% CI Lower", "95% CI Upper"])
+    writer.writerow(["Category", "Averaging", "Metric", "Mean", "Std"])
 
     # 1. 二値分類の評価指標
     for metric in ["accuracy", "precision", "recall", "f1", "auc"]:
         values = binary_metrics[metric]
-        mean, ci_lower, ci_upper = mean_ci(values)
-        writer.writerow(["Binary", "-", metric, mean, ci_lower, ci_upper])
+        mean, std = mean_std(values)
+        writer.writerow(["Binary(1:Re-registered, 0:No re-registered)", "-", metric, mean, std])
 
     # 2. 順序回帰の評価指標
     for name in metric_names:
         values = [m[name] for m in all_metrics]
-        mean, ci_lower, ci_upper = mean_ci(values)
-        writer.writerow(["Ordinal(days_until_next)", "-", name, mean, ci_lower, ci_upper])
+        mean, std = mean_std(values)
+        writer.writerow(["Ordinal(days_until_next)", "-", name, mean, std])
 
 
 
@@ -935,8 +973,8 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
         label = label_names[k]
         for metric in ["accuracy", "precision", "recall", "f1"]:
             values = final_bincls_scores[k][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["OrdinalBinary(Final-Argmax)", f"y <= '{label}'", metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["OrdinalBinary(Final-Argmax)", f"y <= '{label}'", metric, mean, std])
 
 
     # 4. CORAL 順序回帰の各二値タスクごとのスコア
@@ -944,29 +982,29 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
         label = label_names[k]  # 例: '〜1 month'
         for metric in ["accuracy", "precision", "recall", "f1"]:
             values = coral_per_task_scores[k][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["OrdinalBinary", f"y <= '{label}'", metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["OrdinalBinary", f"y <= '{label}'", metric, mean, std])
 
         # --- AUC の統合評価 ---
         auc_values = [v for v in coral_auc_per_task[k] if not np.isnan(v)]
         if len(auc_values) > 0:
-            mean, ci_lower, ci_upper = mean_ci(auc_values)
-            writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, ci_lower, ci_upper])
+            mean, std = mean_std(auc_values)
+            writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, std])
 
     # 5. マルチラベル分類（Macro & Weighted）
     for avg_type, metrics in [("Macro", multilabel_macro_metrics),
                                ("Weighted", multilabel_weighted_metrics)]:
         for metric in ["precision", "recall", "f1-score"]:
             values = metrics[metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["Multilabel", avg_type, metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["Multilabel", avg_type, metric, mean, std])
 
     # 6. マルチラベル分類（ラベルごと）
     for label in multilabel_colnames:
         for metric in ["precision", "recall", "f1-score"]:
             values = per_label_scores[label][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["Multilabel", label, metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["Multilabel", label, metric, mean, std])
     
     # 7. 順序回帰（実測日数 vs 予測日数）の Pearson 相関係数
     true_days_np = np.asarray(all_true_days, dtype=float)
@@ -976,12 +1014,39 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
 
 
 
+# ===== 集計対象キー =====
+time_keys = [
+    "lgb_train_time_sec",
+    "coral_train_time_sec",
+    "multilabel_train_time_sec",
+    "lgb_inference_time_sec",
+    "coral_inference_time_sec",
+    "multilabel_inference_time_sec",
+]
+
+# ===== txt 出力 =====
+output_time_path = os.path.join(result_dir, "time_summary_mean_std.txt")
+
+with open(output_time_path, "w", encoding="utf-8") as f:
+    f.write("=== Training / Inference Time Summary (mean ± std) ===\n")
+    f.write("Unit: seconds\n")
+    f.write("Std: sample std (ddof=1)\n\n")
+
+    for key in time_keys:
+        values = [log[key] for log in time_logs]
+        mean, std = mean_std(values)
+
+        # 例: lgb_train_time_sec: 12.3456 ± 1.2345
+        f.write(f"{key}: {mean:.6f} ± {std:.6f}\n")
+
+print(f"[Saved] {output_time_path}")
 
 
 
-# ==== 二値分類 全fold統合の混同行列を作成・保存 ====
+
+# ==== 二値分類 全fold統合の混同行列を作成・保存 英語====
 cm_bin_all = confusion_matrix(all_y_bin_true, all_y_bin_pred, labels=[0, 1])
-cm_bin_all_df = pd.DataFrame(cm_bin_all, index=["True: 0", "True: 1"], columns=["Pred: 0", "Pred: 1"])
+cm_bin_all_df = pd.DataFrame(cm_bin_all, index=["True: Re-registration observed", "True: No re-registration observed"], columns=["Pred: Re-registration observed", "Pred: No re-registration observed"])
 
 plt.figure(figsize=(8, 6))
 sns.heatmap(cm_bin_all_df, annot=True, fmt='d', cmap='Blues')
@@ -989,8 +1054,22 @@ plt.xlabel("Predicted Label")
 plt.ylabel("True Label")
 plt.title("Confusion Matrix (Binary Classification - All Folds)")
 plt.tight_layout()
-plt.savefig(os.path.join(result_dir, "confusion_matrix_all_folds_lgb.png"))
+plt.savefig(os.path.join(result_dir, "confusion_matrix_all_folds_lgb_en.png"))
 plt.close()
+
+# ==== 二値分類 全fold統合の混同行列を作成・保存 日本語====
+cm_bin_all = confusion_matrix(all_y_bin_true, all_y_bin_pred, labels=[0, 1])
+cm_bin_all_df = pd.DataFrame(cm_bin_all, index=["正解: 再登記あり", "正解: 再登記なし"], columns=["予測: 再登記あり", "予測: 再登記なし"])
+
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm_bin_all_df, annot=True, fmt='d', cmap='Blues')
+plt.xlabel("Predicted Label")
+plt.ylabel("True Label")
+plt.title("Confusion Matrix (Binary Classification - All Folds)")
+plt.tight_layout()
+plt.savefig(os.path.join(result_dir, "confusion_matrix_all_folds_lgb_ja.png"))
+plt.close()
+
 
 
 # ==== 順序分類 全fold統合の混同行列を作成・保存 ====
@@ -1023,7 +1102,7 @@ plt.savefig(os.path.join(result_dir, "scatter_true_vs_pred_days_until_next.png")
 plt.close()
 
 
-# ==== 予測カテゴリごとの正解日数ヒストグラム ====
+# ==== 予測カテゴリごとの正解日数ヒストグラム 英語ver====
 print("予測カテゴリごとの正解日数ヒストグラムを作成中...")
 
 y_pred_cat_np = np.asarray(all_y_pred, dtype=int)  # 予測カテゴリ（0..5）
@@ -1045,7 +1124,7 @@ for cat in range(len(label_names)):  # 0..5
     plt.ylabel("Count")
     plt.title(f"True Days Histogram (Predicted Category = {cat}: {label_names[cat]})")
     plt.tight_layout()
-    plt.savefig(os.path.join(hist_dir, f"hist_true_days_by_predcat_{cat}.png"))
+    plt.savefig(os.path.join(hist_dir, f"hist_true_days_by_predcat_{cat}_en.png"))
     plt.close()
 
 # まとめ図（2x3 グリッド）
@@ -1067,11 +1146,59 @@ for i, ax in enumerate(axes):
 
 plt.suptitle("True Days per Predicted Category", y=1.02, fontsize=14)
 plt.tight_layout()
-plt.savefig(os.path.join(hist_dir, "hist_true_days_by_predcat_grid.png"))
+plt.savefig(os.path.join(hist_dir, "hist_true_days_by_predcat_grid_en.png"))
 plt.close()
 
 print("予測カテゴリごとの正解日数ヒストグラムを保存しました。")
 
+# ==== 予測カテゴリごとの正解日数ヒストグラム 日本語ver====
+print("予測カテゴリごとの正解日数ヒストグラムを作成中...")
+
+y_pred_cat_np = np.asarray(all_y_pred, dtype=int)  # 予測カテゴリ（0..5）
+true_days_np = np.asarray(all_true_days, dtype=float)  # 実測日数
+
+hist_dir = os.path.join(result_dir, "hist_true_days_by_predcat")
+os.makedirs(hist_dir, exist_ok=True)
+
+# 個別（カテゴリごと1枚）
+for cat in range(len(label_names)):  # 0..5
+    mask = (y_pred_cat_np == cat)
+    true_days_cat = true_days_np[mask]
+    if true_days_cat.size == 0:
+        continue
+
+    plt.figure(figsize=(8, 4))
+    plt.hist(true_days_cat, bins=50, alpha=0.8, edgecolor="black")
+    plt.xlabel("正解の登記間隔日数")
+    plt.ylabel("登記数")
+    plt.title(f"正解の登記間隔日数のヒストグラム (予測クラス = {cat}: {label_names[cat]})")
+    plt.tight_layout()
+    plt.savefig(os.path.join(hist_dir, f"hist_true_days_by_predcat_{cat}_ja.png"))
+    plt.close()
+
+# まとめ図（2x3 グリッド）
+fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=True, sharey=True)
+axes = axes.ravel()
+for cat in range(len(label_names)):
+    ax = axes[cat]
+    mask = (y_pred_cat_np == cat)
+    true_days_cat = true_days_np[mask]
+    if true_days_cat.size > 0:
+        ax.hist(true_days_cat, bins=50, alpha=0.85, edgecolor="black")
+    ax.set_title(f"{cat}: {label_names[cat]}")
+
+for i, ax in enumerate(axes):
+    if i % 3 == 0:
+        ax.set_ylabel("登記数")
+    if i >= 3:
+        ax.set_xlabel("正解の登記間隔日数")
+
+plt.suptitle("予測クラスごとの正解の登記間隔日数", y=1.02, fontsize=14)
+plt.tight_layout()
+plt.savefig(os.path.join(hist_dir, "hist_true_days_by_predcat_grid_ja.png"))
+plt.close()
+
+print("予測クラスごとの正解日数ヒストグラムを保存しました。")
 
 
 
@@ -1079,106 +1206,106 @@ print("統合評価の保存フェーズ完了")
 print("--------------------------------")
 
 
-# DM施策（売買限定）のシミュレーション結果を集計・保存
-dm_sim_path = os.path.join(result_dir, "dm_simulation_sale_within_Hmonths.csv")
+# # DM施策（売買限定）のシミュレーション結果を集計・保存
+# dm_sim_path = os.path.join(result_dir, "dm_simulation_sale_within_Hmonths.csv")
 
-with open(dm_sim_path, "w", newline="", encoding="utf-8") as f:
-    writer = csv.writer(f)
-    writer.writerow([
-        "H_months",
-        "TP", "FP", "FN", "TN",
-        "ML_response_rate",
-        "Deals_ML",
-        "Revenue",
-        "Revenue_per_month",
-        "Pi_deal"
-    ])
+# with open(dm_sim_path, "w", newline="", encoding="utf-8") as f:
+#     writer = csv.writer(f)
+#     writer.writerow([
+#         "H_months",
+#         "TP", "FP", "FN", "TN",
+#         "ML_response_rate",
+#         "Deals_ML",
+#         "Revenue",
+#         "Revenue_per_month",
+#         "Pi_deal"
+#     ])
 
-    for H in H_MONTHS_LIST:
-        cnt = dm_confusion[H]
-        TP = cnt["TP"]
-        FP = cnt["FP"]
-        FN = cnt["FN"]
-        TN = cnt["TN"]
+#     for H in H_MONTHS_LIST:
+#         cnt = dm_confusion[H]
+#         TP = cnt["TP"]
+#         FP = cnt["FP"]
+#         FN = cnt["FN"]
+#         TN = cnt["TN"]
 
-        dm_sent = TP + FP
-        if dm_sent > 0:
-            ml_response_rate = TP / dm_sent
-        else:
-            ml_response_rate = 0.0
+#         dm_sent = TP + FP
+#         if dm_sent > 0:
+#             ml_response_rate = TP / dm_sent
+#         else:
+#             ml_response_rate = 0.0
 
-        # 成約数 = DM送付数 × 反響率 × 成約率（ML 手法のみ）
-        deals_ml = DM_FIXED * ml_response_rate * ALPHA
+#         # 成約数 = DM送付数 × 反響率 × 成約率（ML 手法のみ）
+#         deals_ml = DM_FIXED * ml_response_rate * ALPHA
 
-        # 収益 = 成約数 × 1成約あたりの収益（Baseline ではなく絶対値）
-        revenue = deals_ml * PI_DEAL
+#         # 収益 = 成約数 × 1成約あたりの収益（Baseline ではなく絶対値）
+#         revenue = deals_ml * PI_DEAL
 
-        # H ヶ月あたりの平均収益（H で割って正規化）
-        if H > 0:
-            revenue_per_month = revenue / H
-        else:
-            revenue_per_month = 0.0
+#         # H ヶ月あたりの平均収益（H で割って正規化）
+#         if H > 0:
+#             revenue_per_month = revenue / H
+#         else:
+#             revenue_per_month = 0.0
 
-        writer.writerow([
-            H,
-            TP, FP, FN, TN,
-            ml_response_rate,
-            deals_ml,
-            revenue,
-            revenue_per_month,
-            PI_DEAL
-        ])
+#         writer.writerow([
+#             H,
+#             TP, FP, FN, TN,
+#             ml_response_rate,
+#             deals_ml,
+#             revenue,
+#             revenue_per_month,
+#             PI_DEAL
+#         ])
 
-print(f"DMシミュレーション結果を保存しました: {dm_sim_path}")
+# print(f"DMシミュレーション結果を保存しました: {dm_sim_path}")
 
 
-# DM施策（売買限定）の混同行列を保存
-conf_mat_dir = os.path.join(result_dir, "dm_confusion_matrix")
-os.makedirs(conf_mat_dir, exist_ok=True)
+# # DM施策（売買限定）の混同行列を保存
+# conf_mat_dir = os.path.join(result_dir, "dm_confusion_matrix")
+# os.makedirs(conf_mat_dir, exist_ok=True)
 
-for H in H_MONTHS_LIST:
-    cnt = dm_confusion[H]
-    TP, FP, FN, TN = cnt["TP"], cnt["FP"], cnt["FN"], cnt["TN"]
+# for H in H_MONTHS_LIST:
+#     cnt = dm_confusion[H]
+#     TP, FP, FN, TN = cnt["TP"], cnt["FP"], cnt["FN"], cnt["TN"]
 
-    # 2x2 confusion matrix
-    cm = np.array([[TP, FP],
-                   [FN, TN]])
+#     # 2x2 confusion matrix
+#     cm = np.array([[TP, FP],
+#                    [FN, TN]])
 
-    fig, ax = plt.subplots(figsize=(7, 5))
+#     fig, ax = plt.subplots(figsize=(7, 5))
 
-    im = ax.imshow(cm, cmap="Blues")
+#     im = ax.imshow(cm, cmap="Blues")
 
-    # write counts in each cell
-    for i in range(2):
-        for j in range(2):
-            ax.text(j, i, f"{cm[i, j]}", ha="center", va="center", fontsize=12)
+#     # write counts in each cell
+#     for i in range(2):
+#         for j in range(2):
+#             ax.text(j, i, f"{cm[i, j]}", ha="center", va="center", fontsize=12)
 
-    # axis labels based on *meaning* of the positive class:
-    # "H months以内 & sale & DM施策範囲内"
-    ax.set_xticks([0, 1])
-    ax.set_yticks([0, 1])
+#     # axis labels based on *meaning* of the positive class:
+#     # "H months以内 & sale & DM施策範囲内"
+#     ax.set_xticks([0, 1])
+#     ax.set_yticks([0, 1])
 
-    ax.set_xticklabels([
-        f"Pred: Sale within {H} months (DM target)",
-        "Pred: Otherwise"
-    ], fontsize=10, rotation=20, ha="right")
+#     ax.set_xticklabels([
+#         f"Pred: Sale within {H} months (DM target)",
+#         "Pred: Otherwise"
+#     ], fontsize=10, rotation=20, ha="right")
 
-    ax.set_yticklabels([
-        f"True: Sale within {H} months (DM target)",
-        "True: Otherwise"
-    ], fontsize=10)
+#     ax.set_yticklabels([
+#         f"True: Sale within {H} months (DM target)",
+#         "True: Otherwise"
+#     ], fontsize=10)
 
-    ax.set_title(f"Confusion Matrix for H={H} Months\n"
-                 "(Positive = sale within H months in DM target range)",
-                 fontsize=12)
+#     ax.set_title(f"Confusion Matrix for H={H} Months\n"
+#                  "(Positive = sale within H months in DM target range)",
+#                  fontsize=12)
 
-    fig.colorbar(im, ax=ax)
+#     fig.colorbar(im, ax=ax)
 
-    out_path = os.path.join(conf_mat_dir, f"confusion_H{H}.png")
-    plt.tight_layout()
-    plt.savefig(out_path, dpi=300)
-    plt.close()
+#     out_path = os.path.join(conf_mat_dir, f"confusion_H{H}.png")
+#     plt.tight_layout()
+#     plt.savefig(out_path, dpi=300)
+#     plt.close()
 
-print(f"Confusion matrices saved to: {conf_mat_dir}")
+# print(f"Confusion matrices saved to: {conf_mat_dir}")
 
 

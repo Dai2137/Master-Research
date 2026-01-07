@@ -44,14 +44,21 @@ def compute_ordered_metrics(y_true, y_pred):
         # "QWK": qwk
     }
 
-def mean_ci(data, confidence=0.95):
-    n = len(data)
-    m = np.mean(data)
-    se = np.std(data, ddof=1) / np.sqrt(n)
-    h = se * t.ppf((1 + confidence) / 2., n-1)
-    return m, m - h, m + h
+# def mean_ci(data, confidence=0.95):
+#     n = len(data)
+#     m = np.mean(data)
+#     se = np.std(data, ddof=1) / np.sqrt(n)
+#     h = se * t.ppf((1 + confidence) / 2., n-1)
+#     return m, m - h, m + h
 
-
+def mean_std(values):
+    """
+    values: list or np.array
+    return: mean, std (sample std, ddof=1)
+    """
+    mean = float(np.mean(values))
+    std = float(np.std(values, ddof=1))
+    return mean, std
 
 
 
@@ -135,6 +142,8 @@ label_to_midpoint = {
     5: 31 * 120.0      # >120 months（再登記なし）
 }
 
+# ===== 時間ログ（seed×foldごと） =====
+time_logs = []  # list[dict]
 
 seeds = list(range(3))
 
@@ -235,7 +244,7 @@ for seed in seeds:
         print("Seed:", seed+1, "Fold:", fold+1)
         start_time = time.time()
         print("学習開始時刻：", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)))
-
+        t0 = time.perf_counter()
 
         # 再登記されるものだけ使う（binary=0）
         mask_train = y_binary[train_idx] == 0
@@ -261,7 +270,9 @@ for seed in seeds:
                 f.write(str(ord_res.summary()))
 
 
-        
+        t1 = time.perf_counter()
+        olr_train_time = t1 - t0
+
         end_time = time.time()
         print("学習終了時刻：", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)))
         print(f"順序回帰モデル（Ordered Logistic Regression）の学習完了（経過時間: {end_time - start_time:.2f} 秒）")
@@ -285,32 +296,36 @@ for seed in seeds:
         # Step 3: 順序回帰モデルの対象だけ取り出して推論
         X_test_masked = X_test[mask_bin0]
 
+        t0 = time.perf_counter()
         probs_ord_masked = ord_res.predict(X_test_masked)
         preds_ord_masked = np.argmax(probs_ord_masked.values, axis=1)
+
+        t1 = time.perf_counter()
+        olr_inference_time = t1 - t0
 
         # Step 4: 統合予測ラベルの作成（順序分類）
         no_re_registration_class = label_names.index('120- months')  # → 5
         preds_ord_final = np.full_like(y_ord_test, fill_value=no_re_registration_class)
         preds_ord_final[mask_bin0] = preds_ord_masked
 
-        if fold == 0 and seed == 0:
-            print("SHAPの計算を開始...")
-            # 保存ディレクトリを作成（なければ作る）
-            shap_dir = os.path.join(result_dir, "shap_summary_plot")
-            os.makedirs(shap_dir, exist_ok=True)
+        # if fold == 0 and seed == 0:
+        #     print("SHAPの計算を開始...")
+        #     # 保存ディレクトリを作成（なければ作る）
+        #     shap_dir = os.path.join(result_dir, "shap_summary_plot")
+        #     os.makedirs(shap_dir, exist_ok=True)
 
-            print("LightGBMのSHAPの計算を開始...")
-            explainer_lgb = shap.TreeExplainer(clf_bin_lgb)
-            shap_values_lgb = explainer_lgb(X_test)
-            plt.figure()
-            shap.summary_plot(shap_values_lgb, X_test, show=False)
-            plt.title(f"SHAP Summary LightGBM Seed {seed+1} Fold {fold+1}")
-            plt.tight_layout()
-            plt.savefig(os.path.join(shap_dir, f"shap_summary_lgb_seed{seed+1}_fold{fold+1}.png"))
-            plt.close()
-            print("LightGBMのSHAPの計算完了")
+        #     print("LightGBMのSHAPの計算を開始...")
+        #     explainer_lgb = shap.TreeExplainer(clf_bin_lgb)
+        #     shap_values_lgb = explainer_lgb(X_test)
+        #     plt.figure()
+        #     shap.summary_plot(shap_values_lgb, X_test, show=False)
+        #     plt.title(f"SHAP Summary LightGBM Seed {seed+1} Fold {fold+1}")
+        #     plt.tight_layout()
+        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_lgb_seed{seed+1}_fold{fold+1}.png"))
+        #     plt.close()
+        #     print("LightGBMのSHAPの計算完了")
 
-            print("SHAPの計算完了")
+        #     print("SHAPの計算完了")
 
 
 
@@ -324,9 +339,9 @@ for seed in seeds:
 
         # 二値分類の評価
         acc_bin = accuracy_score(y_bin_test, y_bin_pred)
-        precision_bin = precision_score(y_bin_test, y_bin_pred, zero_division=0)
-        recall_bin = recall_score(y_bin_test, y_bin_pred, zero_division=0)
-        f1_bin = f1_score(y_bin_test, y_bin_pred, zero_division=0)
+        precision_bin = precision_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
+        recall_bin = recall_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
+        f1_bin = f1_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
         auc_bin = roc_auc_score(y_bin_test, clf_bin_lgb.predict_proba(X_test)[:, 1])
 
         print(f"[Binary Classification] Acc={acc_bin:.4f}, Precision={precision_bin:.4f}, Recall={recall_bin:.4f}, F1={f1_bin:.4f}, AUC={auc_bin:.4f}")
@@ -430,6 +445,13 @@ for seed in seeds:
         all_true_days.extend(y_true_days.tolist())
         all_pred_days.extend(y_pred_days.tolist())
 
+        time_logs.append({
+            "seed": seed,
+            "fold": fold + 1,
+            "orderedlogisticregression_train_time_sec": olr_train_time,
+            "orderedlogisticregression_inference_time_sec": olr_inference_time,
+        })
+
 
         print("評価フェーズ完了")
 
@@ -444,27 +466,27 @@ summary_all_path = os.path.join(result_dir, "metrics_all_summary_lgb_olr.csv")
 
 with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
-    writer.writerow(["Category", "Averaging", "Metric", "Mean", "95% CI Lower", "95% CI Upper"])
+    writer.writerow(["Category", "Averaging", "Metric", "Mean", "Std"])
 
     # 1. 二値分類の評価指標
     for metric in ["accuracy", "precision", "recall", "f1", "auc"]:
         values = binary_metrics[metric]
-        mean, ci_lower, ci_upper = mean_ci(values)
-        writer.writerow(["Binary", "-", metric, mean, ci_lower, ci_upper])
+        mean, std = mean_std(values)
+        writer.writerow(["Binary(1:Re-registered, 0:No re-registered)", "-", metric, mean, std])
 
     # 2. 順序回帰の評価指標
     for name in metric_names:
         values = [m[name] for m in all_metrics]
-        mean, ci_lower, ci_upper = mean_ci(values)
-        writer.writerow(["Ordinal", "-", name, mean, ci_lower, ci_upper])
+        mean, std = mean_std(values)
+        writer.writerow(["Ordinal", "-", name, mean, std])
 
     # 3. Final (argmax) に対する各しきい値 y ≤ k の二値指標（AUCなし）
     for k in range(olr_output_dim):
         label = label_names[k]
         for metric in ["accuracy", "precision", "recall", "f1"]:
             values = final_bincls_scores[k][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["OrdinalBinary(Final-Argmax)", f"y <= '{label}'", metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["OrdinalBinary(Final-Argmax)", f"y <= '{label}'", metric, mean, std])
 
 
     # 4. olr 順序回帰の各二値タスクごとのスコア
@@ -472,14 +494,14 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
         label = label_names[k]  # 例: '〜1 month'
         for metric in ["accuracy", "precision", "recall", "f1"]:
             values = olr_per_task_scores[k][metric]
-            mean, ci_lower, ci_upper = mean_ci(values)
-            writer.writerow(["OrdinalBinary", f"y <= '{label}'", metric, mean, ci_lower, ci_upper])
+            mean, std = mean_std(values)
+            writer.writerow(["OrdinalBinary", f"y <= '{label}'", metric, mean, std])
 
         # --- AUC の統合評価 ---
         auc_values = [v for v in olr_auc_per_task[k] if not np.isnan(v)]
         if len(auc_values) > 0:
-            mean, ci_lower, ci_upper = mean_ci(auc_values)
-            writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, ci_lower, ci_upper])
+            mean, std = mean_std(auc_values)
+            writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, std])
     
     # 5. 順序回帰（実測日数 vs 予測日数）の Pearson 相関係数
     true_days_np = np.asarray(all_true_days, dtype=float)
@@ -488,6 +510,28 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
     writer.writerow(["Ordinal(days_until_next)", "-", "Pearson_corr_days", corr, "-", f"p={pval}"])
 
 
+# ===== 集計対象キー =====
+time_keys = [
+    "orderedlogisticregression_train_time_sec",
+    "orderedlogisticregression_inference_time_sec",
+]
+
+# ===== txt 出力 =====
+output_time_path = os.path.join(result_dir, "time_summary_mean_std.txt")
+
+with open(output_time_path, "w", encoding="utf-8") as f:
+    f.write("=== Training / Inference Time Summary (mean ± std) ===\n")
+    f.write("Unit: seconds\n")
+    f.write("Std: sample std (ddof=1)\n\n")
+
+    for key in time_keys:
+        values = [log[key] for log in time_logs]
+        mean, std = mean_std(values)
+
+        # 例: lgb_train_time_sec: 12.3456 ± 1.2345
+        f.write(f"{key}: {mean:.6f} ± {std:.6f}\n")
+
+print(f"[Saved] {output_time_path}")
 
 # ==== 二値分類 全fold統合の混同行列を作成・保存 ====
 cm_bin_all = confusion_matrix(all_y_bin_true, all_y_bin_pred, labels=[0, 1])
