@@ -114,8 +114,8 @@ print("データ読み込み完了")
 multilabel_colnames = [col for col in df.columns if col.startswith("on_day_reason_group_") and col.endswith("_next")]
 
 
-X = df.drop(columns=['will_not_be_re_registered', 'days_until_next_category'] +
-            [col for col in df.columns if col.startswith("on_day_reason_group_") and col.endswith("_next")]).values
+X = df.drop(columns=['will_not_be_re_registered', 'days_until_next_category', 'days_until_next'] +
+            [col for col in df.columns if col.startswith("on_day_reason_group_") and col.endswith("_next")]).astype(np.float32)
 
 # y_binary = df['will_not_be_re_registered'].values
 y_ordinal = df['days_until_next_category'].values

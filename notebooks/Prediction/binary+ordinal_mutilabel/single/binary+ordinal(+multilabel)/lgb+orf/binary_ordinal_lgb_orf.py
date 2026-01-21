@@ -330,7 +330,7 @@ for seed in seeds:
                             )
                             model.fit(X.iloc[train_idx], y_binary[train_idx])
                             val_preds = model.predict(X.iloc[val_idx])
-                            score = f1_score(y_binary[val_idx], val_preds)
+                            score = f1_score(y_binary[val_idx], val_preds, pos_label=0)
                             if score > best_score:
                                 best_score = score
                                 best_params_lgb = {
@@ -500,7 +500,11 @@ for seed in seeds:
         precision_bin = precision_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
         recall_bin = recall_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
         f1_bin = f1_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
-        auc_bin = roc_auc_score(y_bin_test, clf_bin_lgb.predict_proba(X_test)[:, 1])
+        # auc_bin = roc_auc_score(y_bin_test, clf_bin_lgb.predict_proba(X_test)[:, 1])
+        proba0 = clf_bin_lgb.predict_proba(X_test)[:, 0]
+        y0 = (y_bin_test == 0).astype(int)
+        auc_bin = roc_auc_score(y0, proba0)
+
 
         print(f"[Binary Classification] Acc={acc_bin:.4f}, Precision={precision_bin:.4f}, Recall={recall_bin:.4f}, F1={f1_bin:.4f}, AUC={auc_bin:.4f}")
         

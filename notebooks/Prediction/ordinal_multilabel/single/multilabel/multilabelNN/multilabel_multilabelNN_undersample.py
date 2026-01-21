@@ -92,8 +92,8 @@ print("データ読み込み完了")
 multilabel_colnames = [col for col in df.columns if col.startswith("on_day_reason_group_") and col.endswith("_next")]
 
 
-X = df.drop(columns=['will_not_be_re_registered', 'days_until_next_category'] +
-            [col for col in df.columns if col.startswith("on_day_reason_group_") and col.endswith("_next")]).values
+X = df.drop(columns=['will_not_be_re_registered', 'days_until_next_category', 'days_until_next'] +
+            [col for col in df.columns if col.startswith("on_day_reason_group_") and col.endswith("_next")]).astype(np.float32)
 
 y_ordinal = df['days_until_next_category'].values  
 y_multilabel = df[[col for col in df.columns if col.startswith("on_day_reason_group_") and col.endswith("_next")]].values
@@ -186,18 +186,18 @@ for seed in seeds:
         print("マルチラベルNNの学習を開始...")
         start_time = time.time()
 
-        X_train = X[train_idx]
+        X_train = X.iloc[train_idx]
         y_multi_train = y_multilabel[train_idx]
 
-        X_val = X[val_idx]
+        X_val = X.iloc[val_idx]
         y_multi_val = y_multilabel[val_idx]
 
 
         # torch tensor に変換
-        X_train_mt = torch.tensor(X_train, dtype=torch.float32)
+        X_train_mt = torch.tensor(X_train.values, dtype=torch.float32)
         y_multi_train = torch.tensor(y_multi_train, dtype=torch.float32)
 
-        X_val_mt = torch.tensor(X_val, dtype=torch.float32)
+        X_val_mt = torch.tensor(X_val.values, dtype=torch.float32)
         y_multi_val = torch.tensor(y_multi_val, dtype=torch.float32)
 
         # DataLoader
@@ -290,11 +290,11 @@ for seed in seeds:
         print("推論フェーズ開始")
 
         # Step 1: テストデータを取得
-        X_test = X[test_idx]
+        X_test = X.iloc[test_idx]
         y_multi_test = y_multilabel[test_idx]
 
         # Step 2: 推論
-        X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
+        X_test_tensor = torch.tensor(X_test.values, dtype=torch.float32)
 
         with torch.no_grad():
             probs_multi_all = model(X_test_tensor)

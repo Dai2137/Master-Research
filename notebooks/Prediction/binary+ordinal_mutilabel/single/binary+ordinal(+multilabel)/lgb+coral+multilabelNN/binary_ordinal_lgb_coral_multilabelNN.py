@@ -230,30 +230,22 @@ binary_metrics = {
 }
 
 
-# DMシミュレーション用設定
-H_MONTHS_LIST = [1, 4, 9, 24, 120]  # しきい値H（ヶ月）
-H_TO_MAX_CATEGORY = {  # days_until_next_category のクラスとの対応
-    1: 0,    # <1 month
-    4: 1,    # 1-4 months
-    9: 2,    # 4-9 months
-    24: 3,   # 9-24 months
-    120: 4   # 24-120 months
-}
+# # DMシミュレーション用設定
+# H_MONTHS_LIST = [1, 4, 9, 24, 120]  # しきい値H（ヶ月）
+# H_TO_MAX_CATEGORY = {  # days_until_next_category のクラスとの対応
+#     1: 0,    # <1 month
+#     4: 1,    # 1-4 months
+#     9: 2,    # 4-9 months
+#     24: 3,   # 9-24 months
+#     120: 4   # 24-120 months
+# }
 
-# 全fold統合DM混同行列カウンタ
-dm_confusion = {
-    H: {"TP": 0, "FP": 0, "FN": 0, "TN": 0}
-    for H in H_MONTHS_LIST
-}
+# # 全fold統合DM混同行列カウンタ
+# dm_confusion = {
+#     H: {"TP": 0, "FP": 0, "FN": 0, "TN": 0}
+#     for H in H_MONTHS_LIST
+# }
 
-# ビジネスシミュレーション用パラメータ
-DM_FIXED = 10_000                    # 月あたり DM送付数（固定）
-BASELINE_RESPONSE_RATE = 0.005       # ML導入前の反響率 0.5%
-ALPHA = 0.40                         # 成約率 40%
-
-# 平均成約価格 6,000〜7,000万円の中間（6,500万円）× 3% + 6万円
-AVG_PRICE = (60_000_000 + 70_000_000) / 2
-PI_DEAL = AVG_PRICE * 0.03 + 60_000   # 1成約あたりの収益（円）
 
 
 # 評価指標格納用
@@ -334,6 +326,11 @@ time_logs = []  # list[dict]
 
 # ラベルごとのスコア格納用（全fold分,マルチラベル分類）
 per_label_scores = {label: {"precision": [], "recall": [], "f1-score": []} for label in multilabel_colnames}
+
+# ===== Per-fold logging buffers (seed x fold) =====
+per_fold_metrics_rows = []   # 1 row per (seed, fold)
+per_fold_bin_cm_rows = []    # 1 row per (seed, fold) with 2x2 flattened counts
+per_fold_ord_cm_rows = []    # 1 row per (seed, fold) with 6x6 flattened counts
 
 
 
@@ -424,7 +421,7 @@ for seed in seeds:
                             )
                             model.fit(X.iloc[train_idx], y_binary[train_idx])
                             val_preds = model.predict(X.iloc[val_idx])
-                            score = f1_score(y_binary[val_idx], val_preds)
+                            score = f1_score(y_binary[val_idx], val_preds, pos_label=0)
                             if score > best_score:
                                 best_score = score
                                 best_params_lgb = {
@@ -530,23 +527,23 @@ for seed in seeds:
         coral_model.load_state_dict(best_model_state)
         
         # 保存ディレクトリを作成（なければ作る）
-        # learning_curve_dir = os.path.join(result_dir, "learning_curve_coral")
-        # os.makedirs(learning_curve_dir, exist_ok=True)
+        learning_curve_dir = os.path.join(result_dir, "learning_curve_coral")
+        os.makedirs(learning_curve_dir, exist_ok=True)
 
-        # plt.figure(figsize=(10, 6))
-        # plt.plot(train_losses, label="Train Loss")
-        # plt.plot(val_losses, label="Validation Loss")
-        # plt.xlabel("Epoch")
-        # plt.ylabel("Loss")
-        # plt.title(f"Learning Curve (Seed {seed+1}, Fold {fold+1}, CORAL)")
-        # plt.legend()
-        # plt.tight_layout()
-        # plt.savefig(os.path.join(learning_curve_dir, f"learning_curve_coral_seed{seed+1}_fold{fold+1}.png"))
-        # plt.close()
+        plt.figure(figsize=(10, 6))
+        plt.plot(train_losses, label="Train Loss")
+        plt.plot(val_losses, label="Validation Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title(f"Learning Curve (Seed {seed+1}, Fold {fold+1}, CORAL)")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(learning_curve_dir, f"learning_curve_coral_seed{seed+1}_fold{fold+1}.png"))
+        plt.close()
         
         t1 = time.perf_counter()
         coral_train_time = t1 - t0
-        # print(f"CORALの学習完了（経過時間: {end_time - start_time:.2f} 秒）")
+        print(f"CORALの学習完了（経過時間: {coral_train_time:.2f} 秒）")
 
 
         # ========== Step 1-2: マルチラベルNNの学習 ==========
@@ -636,19 +633,19 @@ for seed in seeds:
         multilabelNN_model.load_state_dict(best_model_state)
 
         # # 保存ディレクトリを作成（なければ作る）
-        # learning_curve_dir = os.path.join(result_dir, "learning_curve_multilabelNN")
-        # os.makedirs(learning_curve_dir, exist_ok=True)
+        learning_curve_dir = os.path.join(result_dir, "learning_curve_multilabelNN")
+        os.makedirs(learning_curve_dir, exist_ok=True)
 
-        # plt.figure(figsize=(10, 6))
-        # plt.plot(train_losses, label="Train Loss")
-        # plt.plot(val_losses, label="Validation Loss")
-        # plt.xlabel("Epoch")
-        # plt.ylabel("Loss")
-        # plt.title(f"Learning Curve (Seed {seed+1}, Fold {fold+1}, MultilabelNN)")
-        # plt.legend()
-        # plt.tight_layout()
-        # plt.savefig(os.path.join(learning_curve_dir, f"learning_curve_multilabelNN_seed{seed+1}_fold{fold+1}.png"))
-        # plt.close()
+        plt.figure(figsize=(10, 6))
+        plt.plot(train_losses, label="Train Loss")
+        plt.plot(val_losses, label="Validation Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title(f"Learning Curve (Seed {seed+1}, Fold {fold+1}, MultilabelNN)")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(learning_curve_dir, f"learning_curve_multilabelNN_seed{seed+1}_fold{fold+1}.png"))
+        plt.close()
 
 
         
@@ -746,6 +743,99 @@ for seed in seeds:
 
 
 
+        #     # ===== SHAP feature name mapping (English -> Japanese) =====
+        #     feature_name_map = {
+        #         # Time
+        #         "month_sin": "登記月（sin変換）",
+
+        #         # Basic property attributes
+        #         "same_day_count": "同日に起こった登記目的の数",
+        #         "size": "地積",
+        #         "official_price": "公示価格",
+        #         "population_density": "人口密度（都道府県）",
+        #         "building_coverage_ratio": "建ぺい率",
+        #         "floor_area_ratio": "容積率",
+        #         "on_foot": "最寄り駅までの時間（徒歩）",
+
+        #         # On-day registration reason groups (current)
+        #         "on_day_reason_group_sale": "売買",
+        #         "on_day_reason_group_inheritance_or_gift_transfer": "相続・贈与などの所有権移転",
+        #         "on_day_reason_group_other_causes_transfer": "その他の理由による所有権移転",
+        #         "on_day_reason_group_collateral": "抵当権関連",
+        #         "on_day_reason_group_ownership_origin": "所有権の初期設定",
+        #         "on_day_reason_group_physical_change": "地番の分筆・合筆などの物理的変化",
+        #         "on_day_reason_group_title_registration": "表題登記",
+        #         "on_day_reason_group_restriction": "制限関連",
+        #         "on_day_reason_group_title_or_right_correction": "名義・権利の修正",
+        #         "on_day_reason_group_cancellation": "抹消",
+
+        #         # Zoning (dummy)
+        #         "dummy_category_i_mid_high_rise_residential_district": "第一種中高層住居専用地域",
+        #         "dummy_category_i_residential_district": "第一種住居地域",
+        #         "dummy_category_ii_low_rise_exclusive_residential_district": "第二種低層住居専用地域",
+        #         "dummy_category_ii_mid_high_rise_residential_district": "第二種中高層住居専用地域",
+        #         "dummy_category_ii_residential_district": "第二種住居地域",
+        #         "dummy_commercial_district": "商業地域",
+        #         "dummy_neighborhood_commercial_district": "近隣商業地域",
+        #         "dummy_semi_residential_district": "準住居地域",
+        #         "dummy_quasi_industrial_district": "準工業地域",
+        #         "dummy_industrial_district": "工業地域",
+        #         "dummy_exclusively_industrial_district": "工業専用地域",
+        #     }
+
+        #     # ===== SHAP block (Japanese feature names) =====
+        #     print("SHAPの計算を開始...")
+
+        #     # 保存ディレクトリを作成（なければ作る）
+        #     shap_dir = os.path.join(result_dir, "shap_summary_plot")
+        #     os.makedirs(shap_dir, exist_ok=True)
+
+        #     # --- SHAP描画用: 日本語列名DataFrameを作る（存在する列だけ rename） ---
+        #     X_test_ja = X_test.rename(columns={k: v for k, v in feature_name_map.items() if k in X_test.columns})
+
+        #     # 欠けている列があれば警告（任意）
+        #     missing_cols = [c for c in X_test.columns if c not in feature_name_map]
+        #     if len(missing_cols) > 0:
+        #         print(f"[WARN] feature_name_map に未登録の列が {len(missing_cols)} 個あります（例: {missing_cols[:5]}）")
+
+
+        #     # ===== LightGBM SHAP =====
+        #     print("LightGBMのSHAPの計算を開始...")
+        #     explainer_lgb = shap.TreeExplainer(clf_bin_lgb)
+        #     shap_values_lgb = explainer_lgb(X_test)  # Explanation
+
+        #     plt.figure()
+        #     shap.summary_plot(shap_values_lgb, X_test_ja, show=False, max_display=5)
+        #     plt.title(f"SHAP Summary LightGBM Seed {seed+1} Fold {fold+1}")
+        #     plt.tight_layout()
+        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_lgb_seed{seed+1}_fold{fold+1}_max_display5_ja.png"))
+        #     plt.close()
+        #     print("LightGBMのSHAPの計算完了")
+
+        #     # ===== CORAL SHAP =====
+        #     print("CORALのSHAPの計算を開始...")
+
+        #     # predict_fn は "列順" を一致させる必要があるため、columns は X_test の英語列名で固定
+        #     predict_fn = lambda x: predict_midpoint(coral_model, pd.DataFrame(x, columns=X_test.columns))
+
+        #     # Explainer の背景データは X_test（英語列名）でOK
+        #     explainer_coral = shap.Explainer(predict_fn, X_test, model_output="raw")
+        #     shap_values_coral = explainer_coral(X_test)  # Explanation
+
+        #     plt.figure()
+        #     # 可視化時のみ X_test_ja を渡して日本語ラベルを表示
+        #     shap.summary_plot(shap_values_coral, X_test_ja, show=False, max_display=5)
+        #     plt.title(f"SHAP Summary for Predicted Midpoint (months) Seed {seed+1} Fold {fold+1}")
+        #     plt.tight_layout()
+        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_y_pred_mid_seed{seed+1}_fold{fold+1}_max_display5_ja.png"))
+        #     plt.close()
+
+        #     print("CORALのSHAPの計算完了（日本語特徴量名）")
+        #     print("SHAPの計算完了")
+
+
+
+
         print("推論フェーズ完了")
         print("--------------------------------")
 
@@ -762,7 +852,11 @@ for seed in seeds:
         precision_bin = precision_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
         recall_bin = recall_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
         f1_bin = f1_score(y_bin_test, y_bin_pred, pos_label=0, zero_division=0)
-        auc_bin = roc_auc_score(y_bin_test, clf_bin_lgb.predict_proba(X_test)[:, 1])
+        # auc_bin = roc_auc_score(y_bin_test, clf_bin_lgb.predict_proba(X_test)[:, 1])
+        proba0 = clf_bin_lgb.predict_proba(X_test)[:, 0]
+        y0 = (y_bin_test == 0).astype(int)
+        auc_bin = roc_auc_score(y0, proba0)
+
 
         print(f"[Binary Classification] Acc={acc_bin:.4f}, Precision={precision_bin:.4f}, Recall={recall_bin:.4f}, F1={f1_bin:.4f}, AUC={auc_bin:.4f}")
         
@@ -965,8 +1059,6 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
         values = [m[name] for m in all_metrics]
         mean, std = mean_std(values)
         writer.writerow(["Ordinal(days_until_next)", "-", name, mean, std])
-
-
 
     # 3. Final (argmax) に対する各しきい値 y ≤ k の二値指標（AUCなし）
     for k in range(coral_output_dim):

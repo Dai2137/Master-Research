@@ -1,0 +1,10 @@
+=== Training / Inference Time Summary (mean ± std) ===
+Unit: seconds
+Std: sample std (ddof=1)
+
+lgb_train_time_sec: 3.330089 ± 0.191372
+coral_train_time_sec: 181.724084 ± 27.059566
+multilabel_train_time_sec: 283.288716 ± 10.382990
+lgb_inference_time_sec: 0.252746 ± 0.020365
+coral_inference_time_sec: 0.018745 ± 0.002122
+multilabel_inference_time_sec: 0.016580 ± 0.000859

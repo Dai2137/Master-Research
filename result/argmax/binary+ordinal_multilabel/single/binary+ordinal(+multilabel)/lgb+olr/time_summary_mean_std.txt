@@ -1,6 +1,0 @@
-=== Training / Inference Time Summary (mean ± std) ===
-Unit: seconds
-Std: sample std (ddof=1)
-
-orderedlogisticregression_train_time_sec: 1663.112162 ± 278.836438
-orderedlogisticregression_inference_time_sec: 0.141530 ± 0.008652
