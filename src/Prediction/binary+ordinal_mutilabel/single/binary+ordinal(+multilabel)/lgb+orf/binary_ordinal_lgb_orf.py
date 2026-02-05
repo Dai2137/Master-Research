@@ -15,10 +15,30 @@ import seaborn as sns
 import csv
 import shap
 from sklearn.ensemble import RandomForestRegressor
+from pathlib import Path
 
-# 保存パスの指定と準備（変更するの忘れないように！！）
-result_dir = r"D:\fujiwara\M\result\binary+ordinal_multilabel\single\binary+ordinal(+multilabel)\lgb+orf"
-os.makedirs(result_dir, exist_ok=True)
+# ===============================
+# Path settings (relative paths)
+# ===============================
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[5]  
+# ↑ notebooks/Prediction/binary+ordinal_multilabel/single/binary+ordinal(+multilabel)/lgb+orf
+#   から M_リファクタ後/ まで戻る
+
+# 保存パスの指定と準備
+result_dir = (
+    PROJECT_ROOT
+    / "results"
+    / "binary+ordinal_multilabel"
+    / "single"
+    / "binary+ordinal(+multilabel)"
+    / "lgb+orf"
+)
+result_dir.mkdir(parents=True, exist_ok=True)
+
+
+
 
 # ===== Ordered Forest 実装 =====
 class OrderedForest:
@@ -171,10 +191,12 @@ def predict_midpoint(model, X_df):
 
 
 # ---------- データ読み込み ----------
+# ---------- データ読み込み ----------
 print("データ読み込みを開始...")
-df = pd.read_csv(r"D:\fujiwara\M\data\after_preprocess\land_data_for_prediction.csv")
-print("データ読み込み完了")
+data_path = PROJECT_ROOT / "data" / "after_preprocess" / "land_data_for_prediction.csv"
+df = pd.read_csv(data_path)
 
+print("データ読み込み完了")
 
 X = df.drop(columns=['will_not_be_re_registered', 'days_until_next_category', 'days_until_next'] +
             [col for col in df.columns if col.startswith("on_day_reason_group_") and col.endswith("_next")]).astype(np.float32)

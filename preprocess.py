@@ -259,9 +259,10 @@ def map_reason(value):
     return value
 
 print("=== Step 1: Filter valid registration reasons ===")
-before = len(data)
+before = len(data['reason'].unique())
+data['reason'] = data['reason'].astype(str).progress_apply(map_reason)
 data = data[data['reason'].isin(valid_reasons)]
-after = len(data)
+after = len(data['reason'].unique())
 print(f"Filtered reasons: {before:,} → {after:,}")
 
 
@@ -508,6 +509,8 @@ filtered_data['days_until_next_category'] = (
     .progress_apply(categorize_period)
 )
 
+print(filtered_data['days_until_next_category'].value_counts())
+
 
 # 再登記されなかったデータの日数を31*120で埋める
 filtered_data['days_until_next'] = filtered_data['days_until_next'].fillna(31 * 120)
@@ -536,18 +539,6 @@ target_cols = ['will_not_be_re_registered'] + [col for col in land_data_daily.co
 
 land_data_for_prediction = filtered_data[feature_cols + target_cols]
 
-feature_cols = (
-    ['month_sin', 'same_day_count', 'size', 'official_price', 'population_density',
-     'building_coverage_ratio', 'floor_area_ratio', 'on_foot']
-    + [col for col in land_data_daily.columns
-       if col.startswith('on_day_reason_group_') and not col.endswith('_next')]
-    + [col for col in land_data_daily.columns if col.startswith('dummy_')]
-)
-
-target_cols = ['will_not_be_re_registered'] + [col for col in land_data_daily.columns
-               if col.startswith('on_day_reason_group_') and col.endswith('_next')] + ['days_until_next_category'] + ['days_until_next']
-
-land_data_for_prediction = filtered_data[feature_cols + target_cols]
 
 print("=== Step 8: Final dataset ===")
 print(f"Feature columns: {len(feature_cols)}")

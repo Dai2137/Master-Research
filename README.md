@@ -27,16 +27,12 @@
 │
 ├─ data/
 │  ├─ raw/
-│  │  ├─ 2014_受付帳.csv
-│  │  ├─ 2015_受付帳.csv
-│  │  ├─ ...
-│  │  ├─ 2021_受付帳.csv
-│  │  └─ 2022-2023_受付帳.csv
+│  │  └─ 2014-2023_受付帳.csv
 │  │
 │  └─ after_preprocess/
 │     └─ land_data_for_prediction.csv
 │
-├─ notebooks/
+├─ src/
 │  ├─ dm_simulation/
 │  │  ├─ dm_topN_simulation_binary_coral.py
 │  │  └─ dm_topN_simulation_binaryH.py
@@ -79,24 +75,54 @@
 
 ## Execution
 
-### 1. Raw Data Placement
+### 0. Installation
+本リポジトリでは、Python パッケージ管理に **uv** を使用する。
 
-以下のパスに，年次ごとの登記受付帳データを配置する：
+#### 1. uv のインストール
 
-```text
-./data/raw/
+まだ `uv` がインストールされていない場合は、以下を実行する。
+
+```bash
+pip install uv
 ```
 
-ファイル名は以下を想定する：
+#### 2. 仮想環境の作成
 
-* `YYYY_受付帳.csv`（単年）
-* `YYYY-YYYY_受付帳.csv`（複数年まとめ）
+プロジェクトルート（requirements.txt が存在するディレクトリ）で、
+以下を実行して仮想環境を作成する。
 
-例：
+```bash
+uv venv
+```
 
-* `2014_受付帳.csv`
-* `2015_受付帳.csv`
-* `2022-2023_受付帳.csv`
+これにより、プロジェクト配下に .venv/ ディレクトリが作成される。
+
+
+#### 3. 仮想環境の有効化（Windows）
+
+```bash
+.venv\Scripts\Activate.ps1
+```
+
+#### 4. 依存関係のインストール
+
+仮想環境を有効化した状態で、以下を実行する。
+
+```bash
+uv pip install -r requirements.txt
+```
+これにより、requirements.txt に記載されたすべての依存関係がインストールされる。
+
+---
+
+
+### 1. Raw Data Placement
+
+以下のパスに，2014-2023の登記受付帳データを配置する：
+
+```text
+./data/raw/2014-2023_受付帳.csv
+```
 
 ---
 
@@ -109,12 +135,12 @@ python preprocess.py
 ```
 
 `preprocess.py` は `data/raw/` 配下の
-**すべての `*_受付帳.csv` を自動で結合**し，以下を行う：
+2014年から2023年の登記データ('2014-2023_受付帳.csv')に前処理を行い，以下を行う：
 
 * 登記原因の正規化・グルーピング
 * 土地データの抽出
 * 同日登記の集約
-* 次回登記までの日数算出
+* 再登記までの日数算出
 * 再登記原因（マルチラベル）の生成
 * 特徴量・目的変数の作成
 

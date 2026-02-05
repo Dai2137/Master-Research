@@ -18,13 +18,27 @@ import japanize_matplotlib
 import seaborn as sns
 import csv
 import copy
+from pathlib import Path
 
+# ===============================
+# Path settings (relative paths)
+# ===============================
 
-# 保存パスの指定と準備（変更するの忘れないように！！）
-result_dir = r"D:\fujiwara\M\result\ordinal_multilabel\single\multilabel\multilabelNN\no_5_undersample"
-os.makedirs(result_dir, exist_ok=True)
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[5]  
+# ↑ notebooks/Prediction/ordinal_multilabel/single/multilabel/multilabelNN
+#   から M_リファクタ後/ まで戻る
 
-
+# 保存パスの指定と準備
+result_dir = (
+    PROJECT_ROOT
+    / "results"
+    / "ordinal_multilabel"
+    / "single"
+    / "multilabel"
+    / "multlabelNN"
+)
+result_dir.mkdir(parents=True, exist_ok=True)
 
 # ---------- Utility Functions ----------
 def compute_ordered_metrics(y_true, y_pred):
@@ -84,7 +98,8 @@ class MultiLabelNN(nn.Module):
 
 # ---------- データ読み込み ----------
 print("データ読み込みを開始...")
-df = pd.read_csv(r"D:\fujiwara\M\data\after_preprocess\land_data_for_prediction.csv")
+data_path = PROJECT_ROOT / "data" / "after_preprocess" / "land_data_for_prediction.csv"
+df = pd.read_csv(data_path)
 print("データ読み込み完了")
 
 # ラベル名の取得（マルチラベル分類用）

@@ -28,8 +28,8 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[5]  
-# ↑ notebooks/Prediction/binary+ordinal_multilabel/single/binary+ordinal(+multilabel)/lgb+coral+multilabelNN
-#   から M_リファクタ後/ まで戻る
+# ↑ src/Prediction/binary+ordinal_multilabel/single/binary+ordinal(+multilabel)/lgb+coral+multilabelNN
+#   から M_refactored/ まで戻る
 
 # 保存パスの指定と準備
 result_dir = (

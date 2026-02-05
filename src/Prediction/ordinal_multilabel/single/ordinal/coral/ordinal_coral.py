@@ -4,101 +4,41 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, mean_absolute_error, mean_squared_error, cohen_kappa_score, confusion_matrix, classification_report
 from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr, t, pearsonr
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import TensorDataset, DataLoader
 import time
+from tqdm import tqdm, trange
 import os
 import matplotlib
 matplotlib.use("Agg")  # GUIなしで描画できるバックエンドに変更
 import matplotlib.pyplot as plt
 import seaborn as sns
 import csv
+import copy
 import shap
-from sklearn.ensemble import RandomForestRegressor
+from pathlib import Path
 
-# 保存パスの指定と準備（変更するの忘れないように！！）
-result_dir = r"D:\fujiwara\M\result\ordinal_multilabel\single\ordinal\orf\no_5_undersample"
-os.makedirs(result_dir, exist_ok=True)
+# ===============================
+# Path settings (relative paths)
+# ===============================
 
-# ===== Ordered Forest 実装 =====
-class OrderedForest:
-    def __init__(self, n_estimators=100, min_samples_leaf=5, max_features="auto"):
-        self.n_estimators = n_estimators
-        self.min_samples_leaf = min_samples_leaf
-        self.max_features = max_features
-        self.forest = None
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[5]  
+# ↑ notebooks/Prediction/ordinal_multilabel/single/ordinal/coral
+#   から M_リファクタ後/ まで戻る
 
-    def __xcheck(self, X):
-        if not isinstance(X, pd.DataFrame):
-            raise ValueError("X must be a pandas DataFrame")
-
-    def fit(self, X, y, verbose=True):
-        self.__xcheck(X)
-        if isinstance(y, pd.Series):
-            if y.empty:
-                raise ValueError("y Series is empty.")
-            y = y.astype(int)
-        else:
-            raise ValueError("y is not a Pandas Series.")
-
-        print("y.value_counts()")
-        print(y.value_counts())
-
-        nclass = len(y.unique())
-        labels = ['Class ' + str(c_idx) for c_idx in range(nclass)]
-        forests = {}
-        probs = {}
-
-        # for class_idx in range(1, nclass): 元は1-indexed
-        for class_idx in range(nclass - 1):
-            outcome_ind = (y <= class_idx) * 1
-            forests[class_idx] = RandomForestRegressor(
-                n_estimators=self.n_estimators,
-                min_samples_leaf=self.min_samples_leaf,
-                max_features=self.max_features,
-                oob_score=True,
-                random_state=42
-            )
-            forests[class_idx].fit(X=X, y=outcome_ind)
-            probs[class_idx] = pd.Series(forests[class_idx].oob_prediction_,
-                                         name=labels[class_idx],
-                                         index=X.index)
-
-        probs = pd.DataFrame(probs)
-        probs_0 = pd.concat([pd.Series(np.zeros(probs.shape[0]), index=probs.index, name=0), probs], axis=1)
-        probs_1 = pd.concat([probs, pd.Series(np.ones(probs.shape[0]), index=probs.index, name=nclass)], axis=1)
-        class_probs = probs_1 - probs_0.values
-        class_probs[class_probs < 0] = 0
-        class_probs = class_probs.divide(class_probs.sum(axis=1), axis=0)
-        class_probs.columns = labels
-
-        self.nclass = nclass
-        self.forest = {'forests': forests, 'probs': class_probs}
-        if verbose:
-            print("Ordered Forest training complete.")
-        return self
-
-    def predict(self, X):
-        class_probs = self.predict_proba(X)
-        pred_class = pd.Series(class_probs.values.argmax(axis=1), index=X.index)
-        return pred_class
-
-    def predict_proba(self, X):
-        self.__xcheck(X)
-        forests = self.forest['forests']
-        labels = list(self.forest['probs'].columns)
-        nclass = len(labels)
-
-        probs = {}
-        for class_idx in range(nclass - 1):
-            probs[class_idx] = pd.Series(forests[class_idx].predict(X=X), name=labels[class_idx], index=X.index)
-
-        probs = pd.DataFrame(probs)
-        probs_0 = pd.concat([pd.Series(np.zeros(probs.shape[0]), index=probs.index, name=0), probs], axis=1)
-        probs_1 = pd.concat([probs, pd.Series(np.ones(probs.shape[0]), index=probs.index, name=nclass)], axis=1)
-        class_probs = probs_1 - probs_0.values
-        class_probs[class_probs < 0] = 0
-        class_probs = class_probs.divide(class_probs.sum(axis=1), axis=0)
-        class_probs.columns = labels
-        return class_probs
+# 保存パスの指定と準備
+result_dir = (
+    PROJECT_ROOT
+    / "results"
+    / "ordinal_multilabel"
+    / "single"
+    / "ordinal"
+    / "coral"
+)
+result_dir.mkdir(parents=True, exist_ok=True)
 
 
 # ---------- Utility Functions ----------
@@ -137,53 +77,146 @@ def mean_std(values):
     std = float(np.std(values, ddof=1))
     return mean, std
 
-def predict_expected_class(ord_forest, X_df):
-    """
-    ORFモデルの出力から予測されるクラス期待値（soft class）を返す関数
-    SHAP可視化用
-    """
-    class_probs = ord_forest.predict_proba(X_df).values  # shape: (N, K)
-    expected_class = (class_probs * np.arange(class_probs.shape[1])).sum(axis=1)
-    return expected_class.reshape(-1, 1)
+# ---------- CORAL ----------
+class CoralOrdinalNN(nn.Module):
+    def __init__(self, input_dim, num_classes):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, 64)
+        self.fc2 = nn.Linear(64, 32)
+        self.fc3 = nn.Linear(32, 16)
+        self.shared_weight = nn.Parameter(torch.randn(16))
+        self.raw_bias = nn.Parameter(torch.zeros(num_classes - 1))
+        self.relu = nn.ReLU()
 
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+        x_shared = self.relu(self.fc3(x))
+        logits = x_shared @ self.shared_weight
+        logits = logits.unsqueeze(1)
+        ordered_bias = torch.cumsum(F.softplus(self.raw_bias), dim=0)
+        logits = logits + ordered_bias
+        probs = torch.sigmoid(logits)
+        return probs, x_shared
 
-def predict_expected_days(ord_forest, X_df, label_to_midpoint):
-    """
-    ORF model -> expected DAYS (for SHAP)
-    """
-    class_probs = ord_forest.predict_proba(X_df).values.astype(float)  # (N, K)
-    midpoint_days_vec = np.array([label_to_midpoint[c] for c in range(class_probs.shape[1])], dtype=float)
-    expected_days = (class_probs * midpoint_days_vec[None, :]).sum(axis=1)
-    return expected_days.reshape(-1, 1)
+def coral_loss(probs, labels, num_classes):
+    labels = labels.view(-1, 1)
+    target = (torch.arange(num_classes - 1).to(labels.device) >= labels).float()
+    return F.binary_cross_entropy(probs, target, reduction='mean')
 
+def predict_classes(probs):
+    batch_size = probs.shape[0]
+    device = probs.device
+    probs_ext = torch.cat([
+        torch.zeros(batch_size, 1, device=device),
+        probs,
+        torch.ones(batch_size, 1, device=device)
+    ], dim=1)
+    probs_exact = probs_ext[:, 1:] - probs_ext[:, :-1]
+    return torch.argmax(probs_exact, dim=1)
+
+def predict_midpoint(model, X_df):
+    """
+    CORALモデルの出力から「各クラスの範囲中央値ベース」の予測値を返す関数。
+    SHAP可視化に用いる。
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        学習済みのCORALモデル（foldごとに異なる）
+    X_df : pd.DataFrame
+        特徴量名付きDataFrame（.iloc[]で分割後のX_testなど）
+
+    Returns
+    -------
+    np.ndarray : shape (N, 1)
+        各サンプルの予測中央値（月単位）
+    """
+    model.eval()
+    x_tensor = torch.tensor(X_df.values, dtype=torch.float32)
+    label_to_midpoint = torch.tensor([0.5, 2.5, 6.5, 16.5, 72.0, 200.0], dtype=torch.float32)  # 各クラスの中央値
+
+    with torch.no_grad():
+        # CORAL出力: shape (N, K−1)
+        probs, _ = model(x_tensor)
+
+        # 累積確率に 0, 1 を追加して差分を取ることでクラス確率を得る (N, K)
+        probs_ext = torch.cat([
+            torch.zeros((probs.shape[0], 1)),
+            probs,
+            torch.ones((probs.shape[0], 1))
+        ], dim=1)
+        probs_exact = probs_ext[:, 1:] - probs_ext[:, :-1]
+
+        # 各クラス確率 × 範囲中央値の加重平均 → 予測中央値（月単位）
+        y_pred_mid = (probs_exact * label_to_midpoint).sum(dim=1)
+
+    return y_pred_mid.cpu().numpy().reshape(-1, 1)
+
+def predict_expected_days(model, X_df, label_to_midpoint_days):
+    """Return expected days E[Days] computed from CORAL class probabilities.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Trained CORAL model.
+    X_df : pd.DataFrame
+        Feature dataframe.
+    label_to_midpoint_days : dict[int, float]
+        Mapping from class id -> midpoint days.
+
+    Returns
+    -------
+    np.ndarray : shape (N, 1)
+        Expected days for each sample.
+    """
+    model.eval()
+    x_tensor = torch.tensor(X_df.values, dtype=torch.float32)
+
+    # class midpoint days in ascending class order
+    midpoint_days = torch.tensor(
+        [label_to_midpoint_days[i] for i in range(len(label_to_midpoint_days))],
+        dtype=torch.float32
+    )
+
+    with torch.no_grad():
+        probs, _ = model(x_tensor)  # (N, K-1) cumulative probs (y > k 형태가 아니라 구현에 맞춰 ext/diff로 class prob을 얻음)
+
+        # derive class probabilities (N, K)
+        probs_ext = torch.cat([
+            torch.zeros((probs.shape[0], 1)),
+            probs,
+            torch.ones((probs.shape[0], 1))
+        ], dim=1)
+        probs_exact = probs_ext[:, 1:] - probs_ext[:, :-1]
+
+        y_pred_exp = (probs_exact * midpoint_days).sum(dim=1)
+
+    return y_pred_exp.cpu().numpy().reshape(-1, 1)
 
 
 
 # ---------- データ読み込み ----------
 print("データ読み込みを開始...")
-df = pd.read_csv(r"D:\fujiwara\M\data\after_preprocess\land_data_for_prediction.csv")
+data_path = PROJECT_ROOT / "data" / "after_preprocess" / "land_data_for_prediction.csv"
+df = pd.read_csv(data_path)
+
 print("データ読み込み完了")
 
 
 X = df.drop(columns=['will_not_be_re_registered', 'days_until_next_category', 'days_until_next'] +
             [col for col in df.columns if col.startswith("on_day_reason_group_") and col.endswith("_next")]).astype(np.float32)
 
-y_binary = df['will_not_be_re_registered'].values
+# y_binary = df['will_not_be_re_registered'].values 
 y_ordinal = df['days_until_next_category'].values
 
+
 # 順序クラスの数を決定
-num_ord_classes = len(np.unique(y_ordinal))  # ← これで「元のラベルの個数 = 6」が得られる
-num_ord_classes_orf = num_ord_classes # 0〜5の6クラス
-orf_output_dim = num_ord_classes_orf - 1 # 0以下〜4以下の5本のランダムフォレスト
+num_ord_classes_coral = len(np.unique(y_ordinal))  # ← これで「元のラベルの個数 = 6」が得られる
+coral_output_dim = num_ord_classes_coral - 1  # = 5
 
 
-binary_metrics = {
-    "accuracy": [],
-    "precision": [],
-    "recall": [],
-    "f1": [],
-    "auc": []
-}
+
 
 
 # 評価指標格納用
@@ -192,34 +225,31 @@ all_metrics_expected = []
 # metric_names = ["Accuracy", "MAE", "MSE", "RMSE", "Spearman", "QWK"]
 metric_names = ["MAE", "MSE", "RMSE", "Corr"]
 
-all_y_bin_true = []
-all_y_bin_pred = []
-
 # ループ外で定義（foldループの前）
 all_y_true = []
 all_y_pred = []
 
-# 追加（統合フェーズの“日数”可視化/集計用）
-all_true_days = []   # True days (days_until_next)
-all_pred_days = []          # Argmax -> midpoint days
-all_pred_days_expected = [] # Expected value (days)
+# 追加（統合フェーズで実測/予測“日数”を使うため）
+all_true_days = []   # 実測日数（days_until_next）
+all_pred_days = []          # argmax -> midpoint days
+all_pred_days_expected = []   # expected value (days)
 
 
 
-# ORFの二値分類の評価指標格納用
-orf_per_task_scores = {  # foldごとに保持
+# CORALの二値分類の評価指標格納用
+coral_per_task_scores = {  # foldごとに保持
     k: {"accuracy": [], "precision": [], "recall": [], "f1": []}
-    for k in range(orf_output_dim)
+    for k in range(coral_output_dim)
 }
 
 
-# ORFの二値分類のAUC格納用
-orf_auc_per_task = {k: [] for k in range(orf_output_dim)}
+# CORALの二値分類のAUC格納用
+coral_auc_per_task = {k: [] for k in range(coral_output_dim)}
 
 # 最終予測カテゴリに対する「y ≤ k」二値化の評価（AUCなし）
 final_bincls_scores = {
     k: {"accuracy": [], "precision": [], "recall": [], "f1": []}
-    for k in range(orf_output_dim)  # 最後は全て1になるので除外
+    for k in range(coral_output_dim)  # 最後は全て1になるので除外
 }
 
 
@@ -267,6 +297,7 @@ for seed in seeds:
         train_idx, val_idx = train_test_split(trainval_idx, test_size=0.1, random_state=seed * 100 + fold, stratify=y_ordinal[trainval_idx])
         print(f"Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
 
+
         # ===== StandardScaler (fit on train only) =====
         scaler = StandardScaler()
 
@@ -284,10 +315,10 @@ for seed in seeds:
         )
 
 
-         # ===== アンダーサンプリング処理 (train_idxのみ適用, 0-4対象) =====
+        # ===== アンダーサンプリング処理 (train_idxのみ適用) =====
         train_df = df.iloc[train_idx].copy()
 
-        print("Before undersampling (train only, categories 0-4):")
+        print("Before undersampling (train only, all categories):")
         print(train_df['days_until_next_category'].value_counts().sort_index())
 
         counts_0to4 = train_df[train_df['days_until_next_category'].between(0, 4)]['days_until_next_category'].value_counts()
@@ -307,80 +338,113 @@ for seed in seeds:
 
         train_idx = balanced_train_df.index.values
 
-        print("After undersampling (train only, categories 0-4):")
+        print("After undersampling (train only, all categories):")
         print(balanced_train_df['days_until_next_category'].value_counts().sort_index())
 
 
 
-        # ========== ORFの学習 ==========
-        print("ORFの学習（グリッドサーチ）を開始...")
-        print("Seed:", seed+1, "Fold:", fold+1)
+
+        # ========== CORALの学習 ==========
+        print("CORALの学習を開始...")
         start_time = time.time()
-        print("学習開始時刻：", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start_time)))
+
 
         X_train = X.iloc[train_idx]
-        y_ord_train = pd.Series(y_ordinal[train_idx], index=X_train.index)
+        y_ord_train = y_ordinal[train_idx]
 
         X_val = X.iloc[val_idx]
-        y_ord_val = pd.Series(y_ordinal[val_idx], index=X_val.index)
+        y_ord_val = y_ordinal[val_idx]
+        
+        
+        # torch tensor に変換
+        X_train_mt = torch.tensor(X_train.values, dtype=torch.float32)
+        y_ord_train = torch.tensor(y_ord_train, dtype=torch.long)
 
-        # グリッドサーチ設定
-        param_grid_orf = {
-            "n_estimators": [200,300],
-            "min_samples_leaf": [5],
-            "max_features": [0.5]
-        }
+        X_val_mt = torch.tensor(X_val.values, dtype=torch.float32)
+        y_ord_val = torch.tensor(y_ord_val, dtype=torch.long)
 
+        # DataLoader
+        train_dataset = TensorDataset(X_train_mt, y_ord_train)
+        train_loader = DataLoader(train_dataset, batch_size=1024, shuffle=True, generator=torch.Generator().manual_seed(seed * 100 + fold))
 
-        # 各クラスに対応する中央値（midpoint）を定義
-        # 例：<1, 1-4, 4-9, 9-24, 24-120, not re-registered(>120)
-        midpoints = np.array([0.5, 2.5, 6.5, 16.5, 72.0, 120.0])
-
-        best_score_orf = np.inf
-        best_params_orf = None
-
-        for n_est in param_grid_orf["n_estimators"]:
-            for min_leaf in param_grid_orf["min_samples_leaf"]:
-                for max_feat in param_grid_orf["max_features"]:
-                    # モデル作成・学習
-                    orf_tmp = OrderedForest(
-                        n_estimators=n_est,
-                        min_samples_leaf=min_leaf,
-                        max_features=max_feat
-                    )
-                    orf_tmp.fit(X_train, y_ord_train, verbose=False)
-                    
-                    # valデータで予測
-                    preds_val = orf_tmp.predict(X_val)
-
-                    # midpointsに変換してRMSEを計算
-                    y_true_val_mid = midpoints[y_ord_val]
-                    y_pred_val_mid = midpoints[preds_val]
-                    rmse_val = np.sqrt(mean_squared_error(y_true_val_mid, y_pred_val_mid))
-                    
-                    # RMSEが小さいほど良いので小さい値をbestとする
-                    if rmse_val < best_score_orf:
-                        best_score_orf = rmse_val
-                        best_params_orf = {
-                            "n_estimators": n_est,
-                            "min_samples_leaf": min_leaf,
-                            "max_features": max_feat
-                        }
-
-        print("ORF 最適ハイパーパラメータ:", best_params_orf, "Val RMSE:", best_score_orf)
+        # 損失記録用リスト
+        train_losses = []
+        val_losses = []
 
 
+        model = CoralOrdinalNN(input_dim=X.shape[1], num_classes=num_ord_classes_coral)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-        # ベストパラメータで再学習（trainのみ）
-        ord_forest = OrderedForest(**best_params_orf)
-        ord_forest.fit(X_train, y_ord_train, verbose=True)
 
+        num_epochs = 100
+
+        # Early Stopping
+        early_stop_patience = 10
+        best_val_loss = float('inf')
+        patience_counter = 0
+        best_model_state = None
+        
+
+        for epoch in trange(num_epochs, desc="Training Epochs"):
+            model.train()
+            total_train_loss = 0
+            for xb, y_ord in tqdm(train_loader, desc=f"Epoch {epoch+1}", leave=False):
+                optimizer.zero_grad()
+                probs_ord, _ = model(xb)
+                loss = coral_loss(probs_ord, y_ord, num_ord_classes_coral)
+                loss.backward()
+                optimizer.step()
+                total_train_loss += loss.item()
+            
+            avg_train_loss = total_train_loss / len(train_loader)
+            train_losses.append(avg_train_loss)
+
+            # --- Validation損失の計算 ---
+            model.eval()
+            with torch.no_grad():
+                probs_ord_val, _ = model(X_val_mt)
+                val_loss = coral_loss(probs_ord_val, y_ord_val, num_ord_classes_coral)
+                avg_val_loss = val_loss.item()
+                val_losses.append(avg_val_loss)
+
+            print(f"Epoch {epoch+1:3d} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
+
+            # Early Stopping チェック
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                patience_counter = 0
+                best_model_state = copy.deepcopy(model.state_dict())
+            else:
+                patience_counter += 1
+                if patience_counter >= early_stop_patience:
+                    print(f"Early stopping triggered at epoch {epoch+1}")
+                    break
+
+
+        # ベストモデルを復元
+        model.load_state_dict(best_model_state)
+        
+        # 保存ディレクトリを作成（なければ作る）
+        learning_curve_dir = os.path.join(result_dir, "learning_curve")
+        os.makedirs(learning_curve_dir, exist_ok=True)
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(train_losses, label="Train Loss")
+        plt.plot(val_losses, label="Validation Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title(f"Learning Curve (Seed {seed+1}, Fold {fold+1})")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(learning_curve_dir, f"learning_curve_seed{seed+1}_fold{fold+1}.png"))
+        plt.close()
+
+
+        
         end_time = time.time()
-        print("学習終了時刻：", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(end_time)))
-        print(f"ORFの学習完了（経過時間: {end_time - start_time:.2f} 秒）")
+        print(f"CORALの学習完了（経過時間: {end_time - start_time:.2f} 秒）")
         print("学習フェーズ完了")
         print("--------------------------------")
-
 
 
         # ========== Step 2: 推論 ==========
@@ -391,14 +455,14 @@ for seed in seeds:
         X_test = X.iloc[test_idx]
         y_ord_test = y_ordinal[test_idx]
 
-        # Step 2: 推論（確率も取得）
-        probs_ord = ord_forest.predict_proba(X_test)
-        print("probs_ord")
-        print(probs_ord)
-        preds_ord_final = probs_ord.values.argmax(axis=1)
-        print("preds_ord_final")
-        print(preds_ord_final)
+        # Step 2: 推論
+        X_test_tensor = torch.tensor(X_test.values, dtype=torch.float32)
 
+        with torch.no_grad():
+            probs_ord_all, _ = model(X_test_tensor)
+            preds_ord_all = predict_classes(probs_ord_all)
+
+        preds_ord_final = preds_ord_all.numpy()
 
         # if fold == 0 and seed == 0:
         #     print("SHAPの計算を開始...")
@@ -406,33 +470,23 @@ for seed in seeds:
         #     shap_dir = os.path.join(result_dir, "shap_summary_plot")
         #     os.makedirs(shap_dir, exist_ok=True)
 
-        #     print("LightGBMのSHAPの計算を開始...")
-        #     explainer_lgb = shap.TreeExplainer(clf_bin_lgb)
-        #     shap_values_lgb = explainer_lgb(X_test)
-        #     plt.figure()
-        #     shap.summary_plot(shap_values_lgb, X_test, show=False)
-        #     plt.title(f"SHAP Summary LightGBM Seed {seed+1} Fold {fold+1}")
-        #     plt.tight_layout()
-        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_lgb_seed{seed+1}_fold{fold+1}.png"))
-        #     plt.close()
-        #     print("LightGBMのSHAPの計算完了")
-
-        #     print("ORFのSHAPの計算を開始...")
+        #     print("CORALのSHAPの計算を開始...")
             
-        #     predict_fn = lambda x: predict_expected_class(ord_forest, pd.DataFrame(x, columns=X_test.columns))
+        #     predict_fn = lambda x: predict_midpoint(model, pd.DataFrame(x, columns=X_test.columns))
+            # If you want SHAP for Expected Days instead, use the following:
+            # predict_fn = lambda x: predict_expected_days(model, pd.DataFrame(x, columns=X_test.columns), label_to_midpoint)
 
-        #     explainer_orf = shap.Explainer(predict_fn, X_test, model_output="raw")
-        #     shap_values_orf = explainer_orf(X_test)
+        #     explainer_coral = shap.Explainer(predict_fn, X_test, model_output="raw")
+        #     shap_values_coral = explainer_coral(X_test)
 
         #     # 可視化
-        #     shap.summary_plot(shap_values_orf, X_test, show=False)
-        #     plt.title(f"SHAP Summary for Expected Class Seed {seed+1} Fold {fold+1}")
+        #     shap.summary_plot(shap_values_coral, X_test, show=False)
+        #     plt.title(f"SHAP Summary for Predicted Midpoint (months) Seed {seed+1} Fold {fold+1}")
         #     plt.tight_layout()
-        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_expected_class_seed{seed+1}_fold{fold+1}.png"))
+        #     plt.savefig(os.path.join(shap_dir, f"shap_summary_y_pred_mid_seed{seed+1}_fold{fold+1}.png"))
         #     plt.close()
-        #     print("ORFのSHAPの計算完了")
+        #     print("CORALのSHAPの計算完了（y_pred_midベース）")
         #     print("SHAPの計算完了")
-
 
 
         print("推論フェーズ完了")
@@ -443,37 +497,43 @@ for seed in seeds:
         print("--------------------------------")
         print("評価フェーズ開始")
 
-
         # --------- Step 3-1: 順序分類の評価 ----------
-        # 実測は df の days_until_next（既に日数）
-        y_true_days = df.loc[test_idx, "days_until_next"].values.astype(float)
-
+        # acc = accuracy_score(y_ord_test, preds_ord_final)
+        y_true_days = df.loc[test_idx, "days_until_next"].values
         # --- Argmax -> midpoint days (existing) ---
-        y_pred_days = np.array([label_to_midpoint[int(y)] for y in preds_ord_final], dtype=float)
+        y_pred_days = np.array([label_to_midpoint[y] for y in preds_ord_final])
 
-        # --- Expected value days from ORF class probabilities (new) ---
-        class_probs = probs_ord.values.astype(float)  # shape: (n_samples, K)
-        midpoint_days_vec = np.array([label_to_midpoint[c] for c in range(num_ord_classes_orf)], dtype=float)  # len=K
-        y_pred_days_expected = (class_probs * midpoint_days_vec[None, :]).sum(axis=1)
+        # --- Expected value days from CORAL class probabilities (new) ---
+        probs_np = probs_ord_all.cpu().numpy()  # (N, K-1)
+        probs_ext = np.concatenate([
+            np.zeros((probs_np.shape[0], 1), dtype=np.float32),
+            probs_np.astype(np.float32),
+            np.ones((probs_np.shape[0], 1), dtype=np.float32)
+        ], axis=1)
+        probs_exact = probs_ext[:, 1:] - probs_ext[:, :-1]  # (N, K)
+        midpoint_days_vec = np.array([label_to_midpoint[i] for i in range(num_ord_classes_coral)], dtype=np.float32)
+        y_pred_days_expected = (probs_exact * midpoint_days_vec[None, :]).sum(axis=1)
 
-        # Metrics (days)
         mae = mean_absolute_error(y_true_days, y_pred_days)
         mse = mean_squared_error(y_true_days, y_pred_days)
         rmse = np.sqrt(mse)
         corr, _ = pearsonr(y_true_days, y_pred_days)
 
-        mae_exp = mean_absolute_error(y_true_days, y_pred_days_expected)
         mse_exp = mean_squared_error(y_true_days, y_pred_days_expected)
         rmse_exp = np.sqrt(mse_exp)
+        mae_exp = mean_absolute_error(y_true_days, y_pred_days_expected)
         corr_exp, _ = pearsonr(y_true_days, y_pred_days_expected)
+        # spearman, _ = spearmanr(y_ord_test, preds_ord_final)
+        # qwk = cohen_kappa_score(y_ord_test, preds_ord_final, weights='quadratic')
 
         print(f"[Ordinal (Argmax->Midpoint Days)] MAE: {mae:.4f}, MSE: {mse:.4f}, RMSE: {rmse:.4f}, Corr: {corr:.4f}")
         print(f"[Ordinal (Expected Days)]      MAE: {mae_exp:.4f}, MSE: {mse_exp:.4f}, RMSE: {rmse_exp:.4f}, Corr: {corr_exp:.4f}")
 
 
-        # ===== Final preds (argmax後) に対する「各しきい値 y ≤ k」の二値分類指標（AUCなし） =====
+
+        # ===== Final preds (argmax 後) に対する「各しきい値 y ≤ k」の二値分類指標（AUCなし） =====
         print("\n[Final (argmax) y ≤ k : Binary Classification Metrics]")
-        for k in range(orf_output_dim):
+        for k in range(coral_output_dim):
             y_bin_true_k = (y_ord_test <= k).astype(int)
             y_bin_pred_k = (preds_ord_final <= k).astype(int)
 
@@ -492,55 +552,55 @@ for seed in seeds:
                   f"Recall={recall_k:.4f}, F1={f1_k:.4f}")
 
 
-        # ORF の出力（二値タスクごとの評価）
-        # 累積確率（K-1列）を作成
-        class_probs = probs_ord.values                     # shape: (n_samples, K)
-        cum_probs = np.cumsum(class_probs[:, :-1], axis=1)           # shape: (n_samples, K-1)
-        y_ord_bin_targets = (np.arange(num_ord_classes_orf)[None, :] >= (y_ord_test[:, None])).astype(int)
-        y_ord_bin_preds = (cum_probs > 0.5).astype(int)
 
-        print("\n[ORF内部の二値タスクごとの評価指標]")
-        for k in range(orf_output_dim):
+        # CORAL の出力（二値タスクごとの評価）
+        probs_ord_np = probs_ord_all.cpu().numpy()
+        y_ord_bin_targets = (np.arange(num_ord_classes_coral)[None, :] >= y_ord_test[:, None]).astype(int)
+        y_ord_bin_preds = (probs_ord_all.cpu().numpy() > 0.5).astype(int)
+
+        print("\n[CORAL内部の二値タスクごとの評価指標]")
+        for k in range(coral_output_dim):
             acc_k = accuracy_score(y_ord_bin_targets[:, k], y_ord_bin_preds[:, k])
             precision_k = precision_score(y_ord_bin_targets[:, k], y_ord_bin_preds[:, k], zero_division=0)
             recall_k = recall_score(y_ord_bin_targets[:, k], y_ord_bin_preds[:, k], zero_division=0)
             f1_k = f1_score(y_ord_bin_targets[:, k], y_ord_bin_preds[:, k], zero_division=0)
 
-            orf_per_task_scores[k]["accuracy"].append(acc_k)
-            orf_per_task_scores[k]["precision"].append(precision_k)
-            orf_per_task_scores[k]["recall"].append(recall_k)
-            orf_per_task_scores[k]["f1"].append(f1_k)
+            coral_per_task_scores[k]["accuracy"].append(acc_k)
+            coral_per_task_scores[k]["precision"].append(precision_k)
+            coral_per_task_scores[k]["recall"].append(recall_k)
+            coral_per_task_scores[k]["f1"].append(f1_k)
 
             # --- AUC の追加 ---
             try:
-                auc_k = roc_auc_score(y_ord_bin_targets[:, k], cum_probs[:, k])
+                auc_k = roc_auc_score(y_ord_bin_targets[:, k], probs_ord_np[:, k])
             except ValueError:
                 auc_k = np.nan  # 正例 or 負例が1クラスしかないと計算できない
-            orf_auc_per_task[k].append(auc_k)
+            coral_auc_per_task[k].append(auc_k)
 
             print(f"Task y <= '{label_names[k]}': Acc={acc_k:.4f}, Precision={precision_k:.4f}, Recall={recall_k:.4f}, F1={f1_k:.4f}, AUC={auc_k:.4f}")
 
 
 
-        # 順序回帰の指標をまとめて記録（“日数”ベース）
+        # 順序分類の指標をまとめて記録（1〜6分類）
         metrics_argmax = compute_ordered_metrics(y_true_days, y_pred_days)
-        metrics_argmax["Seed"] = seed + 1
         metrics_argmax["Fold"] = fold + 1
         all_metrics_argmax.append(metrics_argmax)
 
         metrics_expected = compute_ordered_metrics(y_true_days, y_pred_days_expected)
-        metrics_expected["Seed"] = seed + 1
         metrics_expected["Fold"] = fold + 1
         all_metrics_expected.append(metrics_expected)
 
-        # 混同行列のためのカテゴリ保持は既存どおり
+
+        # ======= 順序分類の混同行列のための格納 =======
         all_y_true.extend(y_ord_test.tolist())
         all_y_pred.extend(preds_ord_final.tolist())
 
-        # 統合フェーズ（散布図/相関/ヒスト）用に“日数”を蓄積
+        # ======= 順序分類の散布図のための格納 =======
         all_true_days.extend(y_true_days.tolist())
         all_pred_days.extend(y_pred_days.tolist())
         all_pred_days_expected.extend(y_pred_days_expected.tolist())
+
+
 
 
         print("評価フェーズ完了")
@@ -550,33 +610,35 @@ for seed in seeds:
 
 
 print("--------------------------------")
+print("統合評価の保存フェーズ開始")
 # ========= Per-fold metrics CSV (Argmax and Expected in one file) =========
-per_fold_path = os.path.join(result_dir, "metrics_per_fold_orf_argmax_expected.csv")
+per_fold_path = os.path.join(result_dir, "metrics_per_fold_coral_argmax_expected.csv")
+
 rows = []
 for m in all_metrics_argmax:
-    row = {"Variant": "ArgmaxMidpointDays", "Seed": int(m["Seed"]), "Fold": int(m["Fold"])}
+    row = {"Variant": "ArgmaxMidpointDays", "Fold": int(m["Fold"])}
     for name in metric_names:
         row[name] = m[name]
     rows.append(row)
 
 for m in all_metrics_expected:
-    row = {"Variant": "ExpectedDays", "Seed": int(m["Seed"]), "Fold": int(m["Fold"])}
+    row = {"Variant": "ExpectedDays", "Fold": int(m["Fold"])}
     for name in metric_names:
         row[name] = m[name]
     rows.append(row)
 
-df_per_fold = pd.DataFrame(rows).sort_values(["Variant", "Seed", "Fold"]).reset_index(drop=True)
+df_per_fold = pd.DataFrame(rows)
+# Sort for readability
+df_per_fold = df_per_fold.sort_values(["Variant", "Fold"]).reset_index(drop=True)
 df_per_fold.to_csv(per_fold_path, index=False, encoding="utf-8")
 print(f"[Saved] {per_fold_path}")
 
-print("統合評価の保存フェーズ開始")
 # ========= 統合評価CSVの出力（完全版） =========
-summary_all_path = os.path.join(result_dir, "metrics_all_summary_orf_no_5_undersample.csv")
+summary_all_path = os.path.join(result_dir, "metrics_all_summary_coral_no_5_undersample.csv")
 
 with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
     writer.writerow(["Category", "Averaging", "Metric", "Mean", "Std"])
-
 
     # 1. Ordinal metrics (days) - Argmax/Midpoint
     for name in metric_names:
@@ -592,25 +654,23 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
 
 
     # 2. Final (argmax) に対する各しきい値 y ≤ k の二値指標（AUCなし）
-    for k in range(orf_output_dim):
+    for k in range(coral_output_dim):
         label = label_names[k]
         for metric in ["accuracy", "precision", "recall", "f1"]:
             values = final_bincls_scores[k][metric]
             mean, std = mean_std(values)
             writer.writerow(["OrdinalBinary(Final-Argmax)", f"y <= '{label}'", metric, mean, std])
 
-
-
-    # 3. ORF 順序回帰の各二値タスクごとのスコア
-    for k in range(orf_output_dim):
+    # 3. CORAL 順序回帰の各二値タスクごとのスコア
+    for k in range(coral_output_dim):
         label = label_names[k]  # 例: '〜1 month'
         for metric in ["accuracy", "precision", "recall", "f1"]:
-            values = orf_per_task_scores[k][metric]
+            values = coral_per_task_scores[k][metric]
             mean, std = mean_std(values)
             writer.writerow(["OrdinalBinary", f"y <= '{label}'", metric, mean, std])
 
         # --- AUC の統合評価 ---
-        auc_values = [v for v in orf_auc_per_task[k] if not np.isnan(v)]
+        auc_values = [v for v in coral_auc_per_task[k] if not np.isnan(v)]
         if len(auc_values) > 0:
             mean, std = mean_std(auc_values)
             writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, std])
@@ -640,11 +700,8 @@ plt.xlabel("Predicted Label")
 plt.ylabel("True Label")
 plt.title("Confusion Matrix (All Folds)")
 plt.tight_layout()
-plt.savefig(os.path.join(result_dir, "confusion_matrix_all_folds_orf.png"))
+plt.savefig(os.path.join(result_dir, "confusion_matrix_all_folds_ordinal_coral.png"))
 plt.close()
-
-
-
 
 # ==== 散布図（実測日数 vs 予測日数） ====
 true_days_np = np.asarray(all_true_days, dtype=float)
@@ -663,14 +720,9 @@ plt.savefig(os.path.join(result_dir, "scatter_true_vs_pred_days_argmax_midpoint.
 plt.close()
 
 
-
 # ==== Scatter (true days vs expected-value predicted days) ====
 true_days_np = np.asarray(all_true_days, dtype=float)
 pred_days_np_exp = np.asarray(all_pred_days_expected, dtype=float)
-
-mask = ~np.isnan(true_days_np) & ~np.isnan(pred_days_np_exp)
-true_days_np = true_days_np[mask]
-pred_days_np_exp = pred_days_np_exp[mask]
 
 plt.figure(figsize=(8, 6))
 plt.scatter(true_days_np, pred_days_np_exp, alpha=0.3, s=20, edgecolor='none')
@@ -683,11 +735,6 @@ plt.legend(loc="upper left")
 plt.tight_layout()
 plt.savefig(os.path.join(result_dir, "scatter_true_vs_pred_days_expected.png"))
 plt.close()
-
-
-
-
-
 
 # ==== 予測カテゴリごとの正解日数ヒストグラム ====
 print("予測カテゴリごとの正解日数ヒストグラムを作成中...")
@@ -737,7 +784,6 @@ plt.savefig(os.path.join(hist_dir, "hist_true_days_by_predcat_grid.png"))
 plt.close()
 
 print("予測カテゴリごとの正解日数ヒストグラムを保存しました。")
-
 
 
 print("統合評価の保存フェーズ完了")

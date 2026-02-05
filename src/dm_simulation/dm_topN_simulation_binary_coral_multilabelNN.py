@@ -15,17 +15,28 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 
 import matplotlib.pyplot as plt
-
+from pathlib import Path
 
 # =========================================================
 # Settings
 # =========================================================
 
 # Windows paths
-DATA_PATH = r"D:\fujiwara\M\data\after_preprocess\land_data_for_prediction.csv"
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parents[5]  
+# ↑ src/Prediction/binary+ordinal_multilabel/single/binary+ordinal(+multilabel)/lgb+coral+multilabelNN
+#   から M_refactored/ まで戻る
+DATA_PATH = PROJECT_ROOT / "data" / "after_preprocess" / "land_data_for_prediction.csv"
 
-RESULT_DIR = r"D:\fujiwara\M\result\dm_simulation\topN_binary_coral_multilabelNN"
-os.makedirs(RESULT_DIR, exist_ok=True)
+# 保存パスの指定と準備
+RESULT_DIR = (
+    PROJECT_ROOT
+    / "results"
+    / "dm_simulation"
+    / "topN_binary_coral_multilabelNN"
+)
+RESULT_DIR.mkdir(parents=True, exist_ok=True)
+
 
 BASE_SEED = 0
 
