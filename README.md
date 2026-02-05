@@ -267,5 +267,3 @@ python preprocess.py
 ## License
 
 Research use only.
-
-```
