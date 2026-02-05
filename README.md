@@ -62,8 +62,8 @@
 │                 └─ ordinal_orf.py
 │
 ├─ Preprocess_ipynb/
-│  ├─ 14-23_受付帳_各登記原因_*.ipynb
-│  └─ typedata_daily_to_type_data_*.ipynb
+│  ├─ 14-23_受付帳_名寄せ登記原因_to_typedata_daily.ipynb
+│  └─ typedata_daily_to_type_data_for_prediction.ipynb
 │
 ├─ preprocess.py
 ├─ results/
