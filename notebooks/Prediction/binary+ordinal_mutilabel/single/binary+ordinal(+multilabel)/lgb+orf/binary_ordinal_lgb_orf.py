@@ -3,6 +3,7 @@ import numpy as np
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from lightgbm import LGBMClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, mean_absolute_error, mean_squared_error, cohen_kappa_score, confusion_matrix, classification_report
+from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr, t, pearsonr
 import time
 import os
@@ -209,9 +210,14 @@ all_y_true = []
 all_y_pred = []
 
 # 追加（統合フェーズで実測/予測“日数”を使うため）
-all_true_days = []   # 実測日数（days_until_next）
-all_pred_days = []   # 予測カテゴリを日数換算した値
+# ===== containers for ordinal metrics (days) =====
+all_metrics_argmax = []
+all_metrics_expected = []
 
+# ===== containers for scatter / pearson corr (days) =====
+all_true_days = []
+all_pred_days = []            # argmax -> midpoint days
+all_pred_days_expected = []   # expected value days
 
 
 # ORFの二値分類の評価指標格納用
@@ -250,6 +256,13 @@ label_to_midpoint = {
     5: 31 *120.0      # >120 months（再登記なし）
 }
 
+quantitative_cols = [
+    'month_sin', 'same_day_count', 'size', 'official_price',
+    'population_density', 'building_coverage_ratio',
+    'floor_area_ratio', 'on_foot'
+]
+
+
 # ===== 時間ログ（seed×foldごと） =====
 time_logs = []  # list[dict]
 
@@ -269,6 +282,22 @@ for seed in seeds:
         # --- Train/Val/Test 分割 ---
         train_idx, val_idx = train_test_split(trainval_idx, test_size=0.1, random_state=seed * 100 + fold, stratify=y_ordinal[trainval_idx])
         print(f"Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
+
+        # ===== StandardScaler (fit on train only) =====
+        scaler = StandardScaler()
+
+        # train で fit
+        X.loc[train_idx, quantitative_cols] = scaler.fit_transform(
+            X.loc[train_idx, quantitative_cols]
+        )
+
+        # val / test は transform のみ
+        X.loc[val_idx, quantitative_cols] = scaler.transform(
+            X.loc[val_idx, quantitative_cols]
+        )
+        X.loc[test_idx, quantitative_cols] = scaler.transform(
+            X.loc[test_idx, quantitative_cols]
+        )
 
         
         # ===== アンダーサンプリング処理 (train_idxのみ適用, 0-4対象) =====
@@ -485,6 +514,25 @@ for seed in seeds:
         #     # 10日かかるからmarginal effectで計算する
         #     print("SHAPの計算完了")
 
+        # ===== Expected value days (ORF) =====
+        # 初期値：再登記されないと予測されたものは class 5 の中央値
+        y_pred_days_expected = np.full(
+            shape=len(y_ord_test),
+            fill_value=label_to_midpoint[no_re_registration_class],
+            dtype=float
+        )
+
+        # 再登記されると予測されたもののみ ORF の確率期待値を使う
+        if mask_bin0.sum() > 0:
+            class_probs = probs_ord_masked_df.values  # shape: (n_masked, 5) for classes 0..4
+            midpoint_vec = np.array(
+                [label_to_midpoint[c] for c in range(num_ord_classes_orf)],
+                dtype=float
+            )
+            exp_days_masked = (class_probs * midpoint_vec[None, :]).sum(axis=1)
+            y_pred_days_expected[mask_bin0] = exp_days_masked
+
+
 
 
         print("推論フェーズ完了")
@@ -526,13 +574,43 @@ for seed in seeds:
 
         # 予測は「カテゴリ → 中央日数」
         y_pred_days = np.array([label_to_midpoint[y] for y in preds_ord_final])
+        
+        # 初期値：再登記されない予測は class 5 の中央値
+        y_pred_days_expected = np.full_like(
+            y_pred_days,
+            fill_value=float(label_to_midpoint[no_re_registration_class]),
+            dtype=float
+        )
+
+        # 再登記される（binary=0）と予測されたサンプルのみ ORF期待値
+        if mask_bin0.sum() > 0:
+            # ORF の predict_proba で得た確率（classes 0..4 のみ）
+            # ここはあなたの変数名に合わせて：
+            #   probs_ord_masked_df: shape (n_masked, 5) の DataFrame
+            class_probs = probs_ord_masked_df.values.astype(float)
+
+            midpoint_vec_0to4 = np.array(
+                [label_to_midpoint[c] for c in range(num_ord_classes_orf)],
+                dtype=float
+            )
+            exp_days_masked = (class_probs * midpoint_vec_0to4[None, :]).sum(axis=1)
+            y_pred_days_expected[mask_bin0] = exp_days_masked
+
 
         # メトリクス（日数ベース）
         mae = mean_absolute_error(y_true_days, y_pred_days)
         mse = mean_squared_error(y_true_days, y_pred_days)
         rmse = np.sqrt(mse)
         corr, _ = pearsonr(y_true_days, y_pred_days)
-        print(f"[最終的な順序分類評価指標] MAE: {mae:.4f}, MSE: {mse:.4f}, RMSE: {rmse:.4f}, Corr: {corr:.4f}")
+        
+        mae_exp = mean_absolute_error(y_true_days, y_pred_days_expected)
+        mse_exp = mean_squared_error(y_true_days, y_pred_days_expected)
+        rmse_exp = np.sqrt(mse_exp)
+        corr_exp, _ = pearsonr(y_true_days, y_pred_days_expected)
+
+        print(f"[Ordinal (Argmax->Midpoint Days)] MAE={mae:.4f}, RMSE={rmse:.4f}, Corr={corr:.4f}")
+        print(f"[Ordinal (Expected Days)]        MAE={mae_exp:.4f}, RMSE={rmse_exp:.4f}, Corr={corr_exp:.4f}")
+
 
         # 統合フェーズ用に蓄積
 
@@ -542,10 +620,7 @@ for seed in seeds:
         # ======= 順序分類の散布図のための格納 =======
         all_true_days.extend(y_true_days.tolist())
         all_pred_days.extend(y_pred_days.tolist())
-
-        
-
-
+        all_pred_days_expected.extend(y_pred_days_expected.tolist())
 
         # ===== Final preds (argmax後) に対する「各しきい値 y ≤ k」の二値分類指標（AUCなし） =====
         print("\n[Final (argmax) y ≤ k : Binary Classification Metrics]")
@@ -603,9 +678,16 @@ for seed in seeds:
 
 
         # 順序分類の指標をまとめて記録（1〜6分類）
-        metrics = compute_ordered_metrics(y_true_days, y_pred_days)
-        metrics["Fold"] = fold + 1
-        all_metrics.append(metrics)
+        metrics_argmax = compute_ordered_metrics(y_true_days, y_pred_days)
+        metrics_argmax["Seed"] = seed + 1
+        metrics_argmax["Fold"] = fold + 1
+        all_metrics_argmax.append(metrics_argmax)
+
+        metrics_expected = compute_ordered_metrics(y_true_days, y_pred_days_expected)
+        metrics_expected["Seed"] = seed + 1
+        metrics_expected["Fold"] = fold + 1
+        all_metrics_expected.append(metrics_expected)
+
 
         
         time_logs.append({
@@ -625,6 +707,12 @@ for seed in seeds:
 
 print("--------------------------------")
 print("統合評価の保存フェーズ開始")
+
+true_days_np = np.asarray(all_true_days, dtype=float)
+pred_days_np = np.asarray(all_pred_days, dtype=float)
+pred_days_np_exp = np.asarray(all_pred_days_expected, dtype=float)
+
+
 # ========= 統合評価CSVの出力（完全版） =========
 summary_all_path = os.path.join(result_dir, "metrics_all_summary_lgb_orf.csv")
 
@@ -639,10 +727,18 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
         writer.writerow(["Binary(1:Re-registered, 0:No re-registered)", "-", metric, mean, std])
 
     # 2. 順序回帰の評価指標
+    # Ordinal (Argmax)
     for name in metric_names:
-        values = [m[name] for m in all_metrics]
+        values = [m[name] for m in all_metrics_argmax]
         mean, std = mean_std(values)
-        writer.writerow(["Ordinal", "-", name, mean, std])
+        writer.writerow(["Ordinal(ArgmaxMidpointDays)", "-", name, mean, std])
+
+    # Ordinal (Expected)
+    for name in metric_names:
+        values = [m[name] for m in all_metrics_expected]
+        mean, std = mean_std(values)
+        writer.writerow(["Ordinal(ExpectedDays)", "-", name, mean, std])
+
 
 
     # 3. Final (argmax) に対する各しきい値 y ≤ k の二値指標（AUCなし）
@@ -668,10 +764,15 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
             writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, std])
     
     # 5. 順序回帰（“日数”ベース）の相関係数
-    true_days_np = np.asarray(all_true_days, dtype=float)
-    pred_days_np = np.asarray(all_pred_days, dtype=float)
+    # Argmax
     corr, pval = pearsonr(true_days_np, pred_days_np)
-    writer.writerow(["Ordinal", "-", "Pearson_corr_days", corr, "-", f"p={pval}"])
+    writer.writerow(["Ordinal(ArgmaxMidpointDays)", "-", "Pearson_corr_days", corr, "-", f"p={pval}"])
+
+    # Expected
+    pred_days_np_exp = np.asarray(all_pred_days_expected, dtype=float)
+    corr_exp, pval_exp = pearsonr(true_days_np, pred_days_np_exp)
+    writer.writerow(["Ordinal(ExpectedDays)", "-", "Pearson_corr_days", corr_exp, "-", f"p={pval_exp}"])
+
 
 
 # ===== 集計対象キー =====
@@ -739,6 +840,26 @@ plt.legend()
 plt.tight_layout()
 plt.savefig(os.path.join(result_dir, "scatter_true_vs_pred_days.png"))
 plt.close()
+
+# ==== Scatter (true days vs expected-value predicted days) ====
+true_days_np = np.asarray(all_true_days, dtype=float)
+pred_days_np_exp = np.asarray(all_pred_days_expected, dtype=float)
+
+mask = ~np.isnan(true_days_np) & ~np.isnan(pred_days_np_exp)
+true_days_np = true_days_np[mask]
+pred_days_np_exp = pred_days_np_exp[mask]
+
+plt.figure(figsize=(8, 6))
+plt.scatter(true_days_np, pred_days_np_exp, alpha=0.3, s=20, edgecolor="none")
+max_val = max(true_days_np.max(), pred_days_np_exp.max())
+plt.plot([0, max_val], [0, max_val], "r--", linewidth=1.5)
+plt.xlabel("True Days Until Next Registration")
+plt.ylabel("Predicted Days Until Next Registration (Expected)")
+plt.title("True vs Predicted Days (Expected, ORF)")
+plt.tight_layout()
+plt.savefig(os.path.join(result_dir, "scatter_true_vs_pred_days_expected.png"))
+plt.close()
+
 
 
 

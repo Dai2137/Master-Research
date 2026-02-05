@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import f1_score
+from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 import torch
@@ -155,6 +156,13 @@ all_fold_run = []
 all_fold_fold = []
 all_fold_test_size = []
 
+quantitative_cols = [
+    'month_sin', 'same_day_count', 'size', 'official_price',
+    'population_density', 'building_coverage_ratio',
+    'floor_area_ratio', 'on_foot'
+]
+
+
 for run_id in range(N_RUNS):
     # ★ run ごとにサンプリングが変わる（ここが差）
     run_seed = BASE_SEED + run_id
@@ -185,7 +193,6 @@ for run_id in range(N_RUNS):
     for fold, (trainval_idx, test_idx) in enumerate(kf.split(X, y_ordinal)):
         print(f"\n========== Run {run_id+1} | Fold {fold+1} ==========")
 
-        X_trainval = X.iloc[trainval_idx]
         y_ordinal_trainval = y_ordinal[trainval_idx]
 
         train_idx, val_idx = train_test_split(
@@ -195,6 +202,22 @@ for run_id in range(N_RUNS):
             stratify=y_ordinal_trainval,
         )
         print(f"Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
+
+        # ===== StandardScaler (fit on train only) =====
+        scaler = StandardScaler()
+
+        # train で fit
+        X.loc[train_idx, quantitative_cols] = scaler.fit_transform(
+            X.loc[train_idx, quantitative_cols]
+        )
+
+        # val / test は transform のみ
+        X.loc[val_idx, quantitative_cols] = scaler.transform(
+            X.loc[val_idx, quantitative_cols]
+        )
+        X.loc[test_idx, quantitative_cols] = scaler.transform(
+            X.loc[test_idx, quantitative_cols]
+        )
 
         # ------------------------------------
         # Undersampling (train only)

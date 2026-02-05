@@ -1,8 +1,0 @@
-=== Training / Inference Time Summary (mean ± std) ===
-Unit: seconds
-Std: sample std (ddof=1)
-
-lgb_train_time_sec: 3.375438 ± 0.167791
-multitask_train_time_sec: 743.675371 ± 54.223481
-lgb_inference_time_sec: 0.266907 ± 0.018489
-multitask_inference_time_sec: 0.039996 ± 0.001864

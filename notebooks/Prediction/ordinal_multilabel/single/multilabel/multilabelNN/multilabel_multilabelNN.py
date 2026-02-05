@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, mean_absolute_error, mean_squared_error, cohen_kappa_score, confusion_matrix, classification_report
+from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr, t
 import torch
 import torch.nn as nn
@@ -127,6 +128,11 @@ multilabel_weighted_metrics = {
     "f1-score": []
 }
 
+quantitative_cols = [
+    'month_sin', 'same_day_count', 'size', 'official_price',
+    'population_density', 'building_coverage_ratio',
+    'floor_area_ratio', 'on_foot'
+]
 
 
 
@@ -152,6 +158,23 @@ for seed in seeds:
         # --- Train/Val/Test 分割 ---
         train_idx, val_idx = train_test_split(trainval_idx, test_size=0.1, random_state=seed * 100 + fold, stratify=y_ordinal[trainval_idx])
         print(f"Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
+
+        # ===== StandardScaler (fit on train only) =====
+        scaler = StandardScaler()
+
+        # train で fit
+        X.loc[train_idx, quantitative_cols] = scaler.fit_transform(
+            X.loc[train_idx, quantitative_cols]
+        )
+
+        # val / test は transform のみ
+        X.loc[val_idx, quantitative_cols] = scaler.transform(
+            X.loc[val_idx, quantitative_cols]
+        )
+        X.loc[test_idx, quantitative_cols] = scaler.transform(
+            X.loc[test_idx, quantitative_cols]
+        )
+
 
         # ===== アンダーサンプリング処理 (train_idxのみ適用, 0-4対象) =====
         train_df = df.iloc[train_idx].copy()

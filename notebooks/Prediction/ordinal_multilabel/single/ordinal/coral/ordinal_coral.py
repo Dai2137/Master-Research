@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, mean_absolute_error, mean_squared_error, cohen_kappa_score, confusion_matrix, classification_report
+from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr, t, pearsonr
 import torch
 import torch.nn as nn
@@ -13,7 +14,6 @@ import os
 import matplotlib
 matplotlib.use("Agg")  # GUIなしで描画できるバックエンドに変更
 import matplotlib.pyplot as plt
-import japanize_matplotlib
 import seaborn as sns
 import csv
 import copy
@@ -137,6 +137,48 @@ def predict_midpoint(model, X_df):
 
     return y_pred_mid.cpu().numpy().reshape(-1, 1)
 
+def predict_expected_days(model, X_df, label_to_midpoint_days):
+    """Return expected days E[Days] computed from CORAL class probabilities.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Trained CORAL model.
+    X_df : pd.DataFrame
+        Feature dataframe.
+    label_to_midpoint_days : dict[int, float]
+        Mapping from class id -> midpoint days.
+
+    Returns
+    -------
+    np.ndarray : shape (N, 1)
+        Expected days for each sample.
+    """
+    model.eval()
+    x_tensor = torch.tensor(X_df.values, dtype=torch.float32)
+
+    # class midpoint days in ascending class order
+    midpoint_days = torch.tensor(
+        [label_to_midpoint_days[i] for i in range(len(label_to_midpoint_days))],
+        dtype=torch.float32
+    )
+
+    with torch.no_grad():
+        probs, _ = model(x_tensor)  # (N, K-1) cumulative probs (y > k 형태가 아니라 구현에 맞춰 ext/diff로 class prob을 얻음)
+
+        # derive class probabilities (N, K)
+        probs_ext = torch.cat([
+            torch.zeros((probs.shape[0], 1)),
+            probs,
+            torch.ones((probs.shape[0], 1))
+        ], dim=1)
+        probs_exact = probs_ext[:, 1:] - probs_ext[:, :-1]
+
+        y_pred_exp = (probs_exact * midpoint_days).sum(dim=1)
+
+    return y_pred_exp.cpu().numpy().reshape(-1, 1)
+
+
 
 # ---------- データ読み込み ----------
 print("データ読み込みを開始...")
@@ -160,7 +202,8 @@ coral_output_dim = num_ord_classes_coral - 1  # = 5
 
 
 # 評価指標格納用
-all_metrics = []
+all_metrics_argmax = []
+all_metrics_expected = []
 # metric_names = ["Accuracy", "MAE", "MSE", "RMSE", "Spearman", "QWK"]
 metric_names = ["MAE", "MSE", "RMSE", "Corr"]
 
@@ -170,7 +213,8 @@ all_y_pred = []
 
 # 追加（統合フェーズで実測/予測“日数”を使うため）
 all_true_days = []   # 実測日数（days_until_next）
-all_pred_days = []   # 予測カテゴリを日数換算した値
+all_pred_days = []          # argmax -> midpoint days
+all_pred_days_expected = []   # expected value (days)
 
 
 
@@ -211,6 +255,13 @@ label_to_midpoint = {
     5: 31 * 120.0      # >120 months（再登記なし）
 }
 
+quantitative_cols = [
+    'month_sin', 'same_day_count', 'size', 'official_price',
+    'population_density', 'building_coverage_ratio',
+    'floor_area_ratio', 'on_foot'
+]
+
+
 seeds = list(range(3))
 
 for seed in seeds:
@@ -227,6 +278,23 @@ for seed in seeds:
         # --- Train/Val/Test 分割 ---
         train_idx, val_idx = train_test_split(trainval_idx, test_size=0.1, random_state=seed * 100 + fold, stratify=y_ordinal[trainval_idx])
         print(f"Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
+
+
+        # ===== StandardScaler (fit on train only) =====
+        scaler = StandardScaler()
+
+        # train で fit
+        X.loc[train_idx, quantitative_cols] = scaler.fit_transform(
+            X.loc[train_idx, quantitative_cols]
+        )
+
+        # val / test は transform のみ
+        X.loc[val_idx, quantitative_cols] = scaler.transform(
+            X.loc[val_idx, quantitative_cols]
+        )
+        X.loc[test_idx, quantitative_cols] = scaler.transform(
+            X.loc[test_idx, quantitative_cols]
+        )
 
 
         # ===== アンダーサンプリング処理 (train_idxのみ適用) =====
@@ -387,6 +455,8 @@ for seed in seeds:
         #     print("CORALのSHAPの計算を開始...")
             
         #     predict_fn = lambda x: predict_midpoint(model, pd.DataFrame(x, columns=X_test.columns))
+            # If you want SHAP for Expected Days instead, use the following:
+            # predict_fn = lambda x: predict_expected_days(model, pd.DataFrame(x, columns=X_test.columns), label_to_midpoint)
 
         #     explainer_coral = shap.Explainer(predict_fn, X_test, model_output="raw")
         #     shap_values_coral = explainer_coral(X_test)
@@ -412,15 +482,34 @@ for seed in seeds:
         # --------- Step 3-1: 順序分類の評価 ----------
         # acc = accuracy_score(y_ord_test, preds_ord_final)
         y_true_days = df.loc[test_idx, "days_until_next"].values
+        # --- Argmax -> midpoint days (existing) ---
         y_pred_days = np.array([label_to_midpoint[y] for y in preds_ord_final])
+
+        # --- Expected value days from CORAL class probabilities (new) ---
+        probs_np = probs_ord_all.cpu().numpy()  # (N, K-1)
+        probs_ext = np.concatenate([
+            np.zeros((probs_np.shape[0], 1), dtype=np.float32),
+            probs_np.astype(np.float32),
+            np.ones((probs_np.shape[0], 1), dtype=np.float32)
+        ], axis=1)
+        probs_exact = probs_ext[:, 1:] - probs_ext[:, :-1]  # (N, K)
+        midpoint_days_vec = np.array([label_to_midpoint[i] for i in range(num_ord_classes_coral)], dtype=np.float32)
+        y_pred_days_expected = (probs_exact * midpoint_days_vec[None, :]).sum(axis=1)
+
         mae = mean_absolute_error(y_true_days, y_pred_days)
         mse = mean_squared_error(y_true_days, y_pred_days)
         rmse = np.sqrt(mse)
         corr, _ = pearsonr(y_true_days, y_pred_days)
+
+        mse_exp = mean_squared_error(y_true_days, y_pred_days_expected)
+        rmse_exp = np.sqrt(mse_exp)
+        mae_exp = mean_absolute_error(y_true_days, y_pred_days_expected)
+        corr_exp, _ = pearsonr(y_true_days, y_pred_days_expected)
         # spearman, _ = spearmanr(y_ord_test, preds_ord_final)
         # qwk = cohen_kappa_score(y_ord_test, preds_ord_final, weights='quadratic')
 
-        print(f"[最終的な順序分類評価指標] MAE: {mae:.4f}, MSE: {mse:.4f}, RMSE: {rmse:.4f}, Corr: {corr:.4f}")
+        print(f"[Ordinal (Argmax->Midpoint Days)] MAE: {mae:.4f}, MSE: {mse:.4f}, RMSE: {rmse:.4f}, Corr: {corr:.4f}")
+        print(f"[Ordinal (Expected Days)]      MAE: {mae_exp:.4f}, MSE: {mse_exp:.4f}, RMSE: {rmse_exp:.4f}, Corr: {corr_exp:.4f}")
 
 
 
@@ -475,9 +564,13 @@ for seed in seeds:
 
 
         # 順序分類の指標をまとめて記録（1〜6分類）
-        metrics = compute_ordered_metrics(y_true_days, y_pred_days)
-        metrics["Fold"] = fold + 1
-        all_metrics.append(metrics)
+        metrics_argmax = compute_ordered_metrics(y_true_days, y_pred_days)
+        metrics_argmax["Fold"] = fold + 1
+        all_metrics_argmax.append(metrics_argmax)
+
+        metrics_expected = compute_ordered_metrics(y_true_days, y_pred_days_expected)
+        metrics_expected["Fold"] = fold + 1
+        all_metrics_expected.append(metrics_expected)
 
 
         # ======= 順序分類の混同行列のための格納 =======
@@ -487,6 +580,7 @@ for seed in seeds:
         # ======= 順序分類の散布図のための格納 =======
         all_true_days.extend(y_true_days.tolist())
         all_pred_days.extend(y_pred_days.tolist())
+        all_pred_days_expected.extend(y_pred_days_expected.tolist())
 
 
 
@@ -499,6 +593,28 @@ for seed in seeds:
 
 print("--------------------------------")
 print("統合評価の保存フェーズ開始")
+# ========= Per-fold metrics CSV (Argmax and Expected in one file) =========
+per_fold_path = os.path.join(result_dir, "metrics_per_fold_coral_argmax_expected.csv")
+
+rows = []
+for m in all_metrics_argmax:
+    row = {"Variant": "ArgmaxMidpointDays", "Fold": int(m["Fold"])}
+    for name in metric_names:
+        row[name] = m[name]
+    rows.append(row)
+
+for m in all_metrics_expected:
+    row = {"Variant": "ExpectedDays", "Fold": int(m["Fold"])}
+    for name in metric_names:
+        row[name] = m[name]
+    rows.append(row)
+
+df_per_fold = pd.DataFrame(rows)
+# Sort for readability
+df_per_fold = df_per_fold.sort_values(["Variant", "Fold"]).reset_index(drop=True)
+df_per_fold.to_csv(per_fold_path, index=False, encoding="utf-8")
+print(f"[Saved] {per_fold_path}")
+
 # ========= 統合評価CSVの出力（完全版） =========
 summary_all_path = os.path.join(result_dir, "metrics_all_summary_coral_no_5_undersample.csv")
 
@@ -506,11 +622,17 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
     writer.writerow(["Category", "Averaging", "Metric", "Mean", "Std"])
 
-    # 1. 順序回帰の評価指標
+    # 1. Ordinal metrics (days) - Argmax/Midpoint
     for name in metric_names:
-        values = [m[name] for m in all_metrics]
+        values = [m[name] for m in all_metrics_argmax]
         mean, std = mean_std(values)
-        writer.writerow(["Ordinal", "-", name, mean, std])
+        writer.writerow(["Ordinal(ArgmaxMidpointDays)", "-", name, mean, std])
+
+    # 1-2. Ordinal metrics (days) - Expected value
+    for name in metric_names:
+        values = [m[name] for m in all_metrics_expected]
+        mean, std = mean_std(values)
+        writer.writerow(["Ordinal(ExpectedDays)", "-", name, mean, std])
 
 
     # 2. Final (argmax) に対する各しきい値 y ≤ k の二値指標（AUCなし）
@@ -535,11 +657,15 @@ with open(summary_all_path, "w", newline="", encoding="utf-8") as f:
             mean, std = mean_std(auc_values)
             writer.writerow(["OrdinalBinary", f"y <= '{label}'", "AUC", mean, std])
     
-    # 4. 順序回帰 (日数マッピング後) の相関係数
+    # 4. Pearson correlation (days)
     true_days_np = np.asarray(all_true_days, dtype=float)
     pred_days_np = np.asarray(all_pred_days, dtype=float)
     corr, pval = pearsonr(true_days_np, pred_days_np)
-    writer.writerow(["Ordinal", "-", "Pearson_corr_days", corr, "-", f"p={pval}"])
+    writer.writerow(["Ordinal(ArgmaxMidpointDays)", "-", "Pearson_corr_days", corr, "-", f"p={pval}"])
+
+    pred_days_np_exp = np.asarray(all_pred_days_expected, dtype=float)
+    corr_exp_all, pval_exp_all = pearsonr(true_days_np, pred_days_np_exp)
+    writer.writerow(["Ordinal(ExpectedDays)", "-", "Pearson_corr_days", corr_exp_all, "-", f"p={pval_exp_all}"])
 
 
 
@@ -572,7 +698,24 @@ plt.ylabel("Predicted Days Until Next Registration")
 plt.title("True vs Predicted Days Until Next Registration (All Folds)")
 plt.legend()
 plt.tight_layout()
-plt.savefig(os.path.join(result_dir, "scatter_true_vs_pred_days.png"))
+plt.savefig(os.path.join(result_dir, "scatter_true_vs_pred_days_argmax_midpoint.png"))
+plt.close()
+
+
+# ==== Scatter (true days vs expected-value predicted days) ====
+true_days_np = np.asarray(all_true_days, dtype=float)
+pred_days_np_exp = np.asarray(all_pred_days_expected, dtype=float)
+
+plt.figure(figsize=(8, 6))
+plt.scatter(true_days_np, pred_days_np_exp, alpha=0.3, s=20, edgecolor='none')
+max_val = max(true_days_np.max(), pred_days_np_exp.max())
+plt.plot([0, max_val], [0, max_val], color='red', linestyle='--', linewidth=1.5, label="y=x")
+plt.xlabel("True Days Until Next Registration")
+plt.ylabel("Predicted Days Until Next Registration (Expected)")
+plt.title("True vs Predicted Days Until Next Registration (Expected, All Folds)")
+plt.legend(loc="upper left")
+plt.tight_layout()
+plt.savefig(os.path.join(result_dir, "scatter_true_vs_pred_days_expected.png"))
 plt.close()
 
 # ==== 予測カテゴリごとの正解日数ヒストグラム ====
